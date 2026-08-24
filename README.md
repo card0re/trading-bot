@@ -22,6 +22,12 @@ A second, unrelated strategy class — cross-sectional momentum rotation
 real orders, virtual portfolio marked to real prices) to see if it holds up
 live. See `cmd/rotation/main.go` for the rationale.
 
+Tried and **rejected**: a regime-switching allocator (`cmd/regime`) that
+would hand the whole account to whichever of Breakout/Rotation suits the
+basket's current daily ADX. Walk-forward validated the same way as
+everything else — it doesn't hold up out-of-sample; see the doc comment at
+the top of `cmd/regime/main.go` for the numbers.
+
 ## Architecture
 
 ```
