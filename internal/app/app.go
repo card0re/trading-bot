@@ -6,7 +6,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,7 +46,7 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Println("✅ REST API подключен")
+	slog.Info("✅ REST API подключен")
 
 	infos, err := exchange.LoadAllSymbolInfo(ctx, client, cfg.Symbols)
 	if err != nil {
@@ -73,8 +73,8 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Runner, error) {
 		}
 
 		info := infos[symbol]
-		log.Printf("📐 %s: шаг цены %s, шаг объёма %s, мин. номинал %s",
-			info.Symbol, info.TickSize, info.StepSize, info.MinNotional)
+		slog.Info(fmt.Sprintf("📐 %s: шаг цены %s, шаг объёма %s, мин. номинал %s",
+			info.Symbol, info.TickSize, info.StepSize, info.MinNotional))
 
 		executor := exchange.NewOrderExecutor(client, info)
 		fundingSrc := exchange.NewLiveFundingRateSource(client, symbol)
@@ -242,7 +242,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		srv := &http.Server{Addr: r.cfg.MetricsAddr, Handler: r.MetricsHandler()}
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("⚠️  Metrics-сервер остановился: %v", err)
+				slog.Warn(fmt.Sprintf("⚠️  Metrics-сервер остановился: %v", err))
 			}
 		}()
 		go func() {
@@ -251,11 +251,11 @@ func (r *Runner) Run(ctx context.Context) error {
 			defer cancel()
 			srv.Shutdown(shutdownCtx)
 		}()
-		log.Printf("📊 Метрики на http://%s/metrics", r.cfg.MetricsAddr)
+		slog.Info(fmt.Sprintf("📊 Метрики на http://%s/metrics", r.cfg.MetricsAddr))
 	}
 
-	log.Printf("✅ Бот в работе | %d символ(ов) %v | %s | окно %d свечей",
-		len(r.cfg.Symbols), r.cfg.Symbols, r.cfg.Interval, r.cfg.LookbackBars)
+	slog.Info(fmt.Sprintf("✅ Бот в работе | %d символ(ов) %v | %s | окно %d свечей",
+		len(r.cfg.Symbols), r.cfg.Symbols, r.cfg.Interval, r.cfg.LookbackBars))
 
 	for {
 		select {
@@ -278,7 +278,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 
 		case <-ctx.Done():
-			log.Println("🛑 Получен сигнал остановки...")
+			slog.Info("🛑 Получен сигнал остановки...")
 
 			// Контекст уже отменён — для завершающих запросов нужен свежий.
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -307,7 +307,7 @@ func waitClosed(chans ...<-chan struct{}) {
 		select {
 		case <-ch:
 		case <-deadline:
-			log.Println("⚠️  Поток не завершился вовремя, выхожу")
+			slog.Warn("⚠️  Поток не завершился вовремя, выхожу")
 			return
 		}
 	}

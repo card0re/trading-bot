@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -43,19 +43,19 @@ func (t *Telegram) Notify(ctx context.Context, message string) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body.Encode()))
 	if err != nil {
-		log.Printf("⚠️  Telegram: %v", err)
+		slog.Warn(fmt.Sprintf("⚠️  Telegram: %v", err))
 		return
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		log.Printf("⚠️  Telegram недоступен: %v", err)
+		slog.Warn(fmt.Sprintf("⚠️  Telegram недоступен: %v", err))
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("⚠️  Telegram вернул статус %d", resp.StatusCode)
+		slog.Warn(fmt.Sprintf("⚠️  Telegram вернул статус %d", resp.StatusCode))
 	}
 }
 
@@ -97,7 +97,7 @@ func (t *Telegram) ListenCommands(ctx context.Context, statusFn func(context.Con
 			if ctx.Err() != nil {
 				return // отмена во время long-poll — не ошибка, просто выходим
 			}
-			log.Printf("⚠️  Telegram getUpdates: %v — повтор через 5с", err)
+			slog.Warn(fmt.Sprintf("⚠️  Telegram getUpdates: %v — повтор через 5с", err))
 			select {
 			case <-ctx.Done():
 				return
@@ -112,7 +112,7 @@ func (t *Telegram) ListenCommands(ctx context.Context, statusFn func(context.Con
 				continue
 			}
 			if strconv.FormatInt(u.Message.Chat.ID, 10) != t.chatID {
-				log.Printf("⚠️  Telegram: команда из чужого чата (%d) проигнорирована", u.Message.Chat.ID)
+				slog.Warn(fmt.Sprintf("⚠️  Telegram: команда из чужого чата (%d) проигнорирована", u.Message.Chat.ID))
 				continue
 			}
 			switch strings.TrimSpace(u.Message.Text) {

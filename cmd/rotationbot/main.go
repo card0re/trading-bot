@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +32,7 @@ import (
 
 	"trading-bot/internal/domain"
 	exchange "trading-bot/internal/exchange/binance"
+	"trading-bot/internal/logging"
 	"trading-bot/internal/metrics"
 	"trading-bot/internal/notify"
 	"trading-bot/internal/rotation"
@@ -59,6 +61,7 @@ func main() {
 	startEquityStr := flag.String("equity", "10000", "стартовый виртуальный эквити, USDT")
 	checkEvery := flag.Duration("check-every", time.Hour, "как часто проверять, не пора ли ребалансировать")
 	flag.Parse()
+	logging.Setup()
 
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		fmt.Println("ℹ️  .env не найден, читаю системные переменные")
@@ -97,8 +100,8 @@ func main() {
 	futures.UseTestnet = false // цены с боевой сети — портфель виртуальный, реальных ордеров нет
 	client := binance.NewFuturesClient("", "")
 
-	log.Printf("🚀 Rotation shadow-bot | %v | lookback=%dд topK=%d rebalance=%dд | эквити %s",
-		p.symbols, p.lookbackDays, p.topK, p.rebalanceEvery, st.Equity.StringFixed(2))
+	slog.Info(fmt.Sprintf("🚀 Rotation shadow-bot | %v | lookback=%dд topK=%d rebalance=%dд | эквити %s",
+		p.symbols, p.lookbackDays, p.topK, p.rebalanceEvery, st.Equity.StringFixed(2)))
 	if notifier != nil {
 		notifier.Notify(ctx, fmt.Sprintf("🔄 [РОТАЦИЯ] Бот запущен (виртуальный портфель, без реальных ордеров)\nЭквити: %s USDT", st.Equity.StringFixed(2)))
 	}
@@ -116,7 +119,7 @@ func main() {
 			return
 		}
 		if err := rebalance(ctx, client, &st, p, notifier); err != nil {
-			log.Printf("⚠️  Ребаланс не удался: %v", err)
+			slog.Warn(fmt.Sprintf("⚠️  Ребаланс не удался: %v", err))
 			// Сохраняем состояние даже при ошибке: rebalance мог успеть
 			// закрыть старые позиции (мутировать st через указатель) до
 			// того, как споткнулся дальше (например, эквити после закрытия
@@ -126,7 +129,7 @@ func main() {
 			// заново по другой цене.
 		}
 		if err := rotation.SaveState(*statePath, st); err != nil {
-			log.Printf("⚠️  Не удалось сохранить состояние: %v", err)
+			slog.Warn(fmt.Sprintf("⚠️  Не удалось сохранить состояние: %v", err))
 		}
 	}
 
@@ -140,7 +143,7 @@ func main() {
 		srv := &http.Server{Addr: addr, Handler: metrics.Handler(collect)}
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("⚠️  Metrics-сервер остановился: %v", err)
+				slog.Warn(fmt.Sprintf("⚠️  Metrics-сервер остановился: %v", err))
 			}
 		}()
 		go func() {
@@ -149,7 +152,7 @@ func main() {
 			defer cancel()
 			srv.Shutdown(shutdownCtx)
 		}()
-		log.Printf("📊 Метрики на http://%s/metrics", addr)
+		slog.Info(fmt.Sprintf("📊 Метрики на http://%s/metrics", addr))
 	}
 
 	check() // сразу при старте — если это первый запуск или пропущенный срок
@@ -161,7 +164,7 @@ func main() {
 		case <-ticker.C:
 			check()
 		case <-ctx.Done():
-			log.Println("🛑 Остановка (виртуальные позиции сохранены как есть)")
+			slog.Info("🛑 Остановка (виртуальные позиции сохранены как есть)")
 			return
 		}
 	}
@@ -185,7 +188,7 @@ func rebalance(ctx context.Context, client *futures.Client, st *rotation.State, 
 	for _, s := range p.symbols {
 		candles, err := exchange.LoadHistoricalCandles(ctx, client, s, "1d", start, end)
 		if err != nil || len(candles) < p.lookbackDays+1 {
-			log.Printf("⚠️  %s: недостаточно данных для ребаланса (%v)", s, err)
+			slog.Warn(fmt.Sprintf("⚠️  %s: недостаточно данных для ребаланса (%v)", s, err))
 			continue
 		}
 		last := candles[len(candles)-1].Close
@@ -268,8 +271,8 @@ func rebalance(ctx context.Context, client *futures.Client, st *rotation.State, 
 	}
 	st.LastRebalance = time.Now()
 
-	log.Printf("🔄 Ребаланс | закрыто: %s | открыто: %s | эквити %s | просадка от пика %s%%",
-		strings.Join(closedLines, ", "), strings.Join(openedLines, ", "), st.Equity.StringFixed(2), drawdownPct.StringFixed(2))
+	slog.Info(fmt.Sprintf("🔄 Ребаланс | закрыто: %s | открыто: %s | эквити %s | просадка от пика %s%%",
+		strings.Join(closedLines, ", "), strings.Join(openedLines, ", "), st.Equity.StringFixed(2), drawdownPct.StringFixed(2)))
 
 	if notifier != nil {
 		msg := "🔄 [РОТАЦИЯ] Ребаланс\n"

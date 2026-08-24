@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"trading-bot/internal/domain"
@@ -60,8 +60,8 @@ func (e *OrderExecutor) OpenLong(ctx context.Context, qty decimal.Decimal) (deci
 		avg = pos.EntryPrice
 	}
 
-	log.Printf("✅ ВХОД В ЛОНГ | %s | %s шт | средняя цена %s | ID %d",
-		e.info.Symbol, e.info.FormatQuantity(qty), e.info.FormatPrice(avg), order.OrderID)
+	slog.Info(fmt.Sprintf("✅ ВХОД В ЛОНГ | %s | %s шт | средняя цена %s | ID %d",
+		e.info.Symbol, e.info.FormatQuantity(qty), e.info.FormatPrice(avg), order.OrderID))
 	return avg, nil
 }
 
@@ -89,8 +89,8 @@ func (e *OrderExecutor) OpenShort(ctx context.Context, qty decimal.Decimal) (dec
 		avg = pos.EntryPrice
 	}
 
-	log.Printf("✅ ВХОД В ШОРТ | %s | %s шт | средняя цена %s | ID %d",
-		e.info.Symbol, e.info.FormatQuantity(qty), e.info.FormatPrice(avg), order.OrderID)
+	slog.Info(fmt.Sprintf("✅ ВХОД В ШОРТ | %s | %s шт | средняя цена %s | ID %d",
+		e.info.Symbol, e.info.FormatQuantity(qty), e.info.FormatPrice(avg), order.OrderID))
 	return avg, nil
 }
 
@@ -137,7 +137,7 @@ func (e *OrderExecutor) placeConditional(ctx context.Context, orderType, tag str
 		return fmt.Errorf("постановка %s на %s: %w", orderType, e.info.FormatPrice(trigger), err)
 	}
 
-	log.Printf("🛡️  %s ВЫСТАВЛЕН | %s | триггер %s", orderType, e.info.Symbol, e.info.FormatPrice(trigger))
+	slog.Info(fmt.Sprintf("🛡️  %s ВЫСТАВЛЕН | %s | триггер %s", orderType, e.info.Symbol, e.info.FormatPrice(trigger)))
 	return nil
 }
 
@@ -170,7 +170,7 @@ func (e *OrderExecutor) ClosePositionMarket(ctx context.Context) error {
 		return fmt.Errorf("аварийное закрытие позиции: %w", err)
 	}
 
-	log.Printf("🚪 ПОЗИЦИЯ ЗАКРЫТА ПО РЫНКУ | %s | %s шт", e.info.Symbol, e.info.FormatQuantity(amount.Abs()))
+	slog.Info(fmt.Sprintf("🚪 ПОЗИЦИЯ ЗАКРЫТА ПО РЫНКУ | %s | %s шт", e.info.Symbol, e.info.FormatQuantity(amount.Abs())))
 	return nil
 }
 
@@ -220,7 +220,7 @@ func (e *OrderExecutor) CancelAll(ctx context.Context) error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	log.Printf("🧹 Ордера по %s сняты (обычные + алго)", e.info.Symbol)
+	slog.Info(fmt.Sprintf("🧹 Ордера по %s сняты (обычные + алго)", e.info.Symbol))
 	return nil
 }
 

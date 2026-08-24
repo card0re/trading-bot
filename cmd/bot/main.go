@@ -3,22 +3,25 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"trading-bot/internal/app"
 	"trading-bot/internal/config"
+	"trading-bot/internal/logging"
 )
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
-	log.Println("🚀 Запуск торгового бота...")
+	logging.Setup()
+	slog.Info("🚀 Запуск торгового бота...")
 
 	if err := run(); err != nil {
 		log.Fatalf("❌ %v", err)
 	}
-	log.Println("👋 Бот остановлен")
+	slog.Info("👋 Бот остановлен")
 }
 
 func run() error {
@@ -31,9 +34,9 @@ func run() error {
 		return err
 	}
 	if cfg.UseTestnet {
-		log.Println("🧪 Режим TESTNET")
+		slog.Info("🧪 Режим TESTNET")
 	} else {
-		log.Println("💰 Режим БОЕВОЙ ТОРГОВЛИ — работа с реальными средствами")
+		slog.Info("💰 Режим БОЕВОЙ ТОРГОВЛИ — работа с реальными средствами")
 	}
 
 	// Настройка N символов — это N REST-вызовов подряд; 60с с запасом.

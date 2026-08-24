@@ -6,7 +6,7 @@ package strategy
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 
 	"trading-bot/internal/domain"
@@ -234,8 +234,8 @@ func (b *Breakout) Warmup(candles []domain.Candle) {
 		b.updateATR(c.High, c.Low, c.Close)
 		b.adx.Update(c.High, c.Low, c.Close)
 	}
-	log.Printf("📚 Прогрев: скормлено %d свечей | окно пробоя %d/%d",
-		len(candles), len(b.highs), b.params.LookbackBars)
+	slog.Info(fmt.Sprintf("📚 Прогрев: скормлено %d свечей | окно пробоя %d/%d",
+		len(candles), len(b.highs), b.params.LookbackBars))
 }
 
 // updateATR обновляет ATR и (только когда он уже Ready) — среднее ATR для
@@ -299,7 +299,7 @@ func (b *Breakout) OnCandle(ctx context.Context, c domain.Candle) {
 			fundingRate = rate
 			haveFunding = true
 		} else {
-			log.Printf("⚠️  Funding rate для carry-входа недоступен: %v", err)
+			slog.Warn(fmt.Sprintf("⚠️  Funding rate для carry-входа недоступен: %v", err))
 		}
 	}
 
@@ -342,7 +342,7 @@ func (b *Breakout) OnCandle(ctx context.Context, c domain.Candle) {
 		if checkBE {
 			b.maybeMoveToBreakeven(ctx, c, beSide, beEntry, beStop, beTake, beRiskDist)
 		} else {
-			log.Printf("📊 %s close=%s | состояние %s, сигналы не ищу", c.Symbol, c.Close, st)
+			slog.Info(fmt.Sprintf("📊 %s close=%s | состояние %s, сигналы не ищу", c.Symbol, c.Close, st))
 		}
 		return
 	}
@@ -350,13 +350,13 @@ func (b *Breakout) OnCandle(ctx context.Context, c domain.Candle) {
 		b.cooldownLeft--
 		left := b.cooldownLeft
 		b.mu.Unlock()
-		log.Printf("⏳ Пауза после сделки: осталось %d свечей", left)
+		slog.Info(fmt.Sprintf("⏳ Пауза после сделки: осталось %d свечей", left))
 		return
 	}
 	if !rangeReady || !volReady || !trendReady || !atrReady {
 		have := len(b.highs)
 		b.mu.Unlock()
-		log.Printf("📚 Набираю историю индикаторов: %d/%d свечей", have, b.params.LookbackBars)
+		slog.Info(fmt.Sprintf("📚 Набираю историю индикаторов: %d/%d свечей", have, b.params.LookbackBars))
 		return
 	}
 
@@ -412,10 +412,10 @@ func (b *Breakout) OnCandle(ctx context.Context, c domain.Candle) {
 		openSide, reason = sideShort, "FUNDING CARRY"
 	default:
 		b.mu.Unlock()
-		log.Printf("🧊 Сигнала нет | close=%s | лонг(нужен >%s, тренд>%s) шорт(нужен <%s, тренд<%s) объём(%v, нужен >%s) ADX(%v, нужен >=%s)",
+		slog.Info(fmt.Sprintf("🧊 Сигнала нет | close=%s | лонг(нужен >%s, тренд>%s) шорт(нужен <%s, тренд<%s) объём(%v, нужен >%s) ADX(%v, нужен >=%s)",
 			c.Close, longTrigger.StringFixed(2), trendVal.StringFixed(2),
 			shortTrigger.StringFixed(2), trendVal.StringFixed(2),
-			volumeOK, volumeTrigger.StringFixed(4), adxOK, b.params.TrendStrengthMinADX.StringFixed(1))
+			volumeOK, volumeTrigger.StringFixed(4), adxOK, b.params.TrendStrengthMinADX.StringFixed(1)))
 		return
 	}
 
@@ -424,9 +424,9 @@ func (b *Breakout) OnCandle(ctx context.Context, c domain.Candle) {
 	b.st = stateOpening
 	b.mu.Unlock()
 
-	log.Printf("🔥 %s %s с подтверждением | close=%s | тренд EMA%d=%s | ADX=%s | объём %s > %s",
+	slog.Info(fmt.Sprintf("🔥 %s %s с подтверждением | close=%s | тренд EMA%d=%s | ADX=%s | объём %s > %s",
 		reason, openSide, c.Close, b.params.TrendEMAPeriod, trendVal.StringFixed(2), adxVal.StringFixed(1),
-		c.Volume.StringFixed(4), volumeTrigger.StringFixed(4))
+		c.Volume.StringFixed(4), volumeTrigger.StringFixed(4)))
 	b.openPosition(ctx, openSide, reason, c.Close, atrVal, prevAvgATR)
 }
 
@@ -467,27 +467,27 @@ func (b *Breakout) lowestLow() (decimal.Decimal, bool) {
 func (b *Breakout) openPosition(ctx context.Context, side posSide, reason string, refPrice, atrValue, avgATR decimal.Decimal) {
 	stopDistance := atrValue.Mul(b.params.ATRStopMultiplier)
 	if stopDistance.LessThanOrEqual(decimal.Zero) {
-		log.Printf("❌ Нулевое расстояние стопа (ATR=%s) — сделку не открываю", atrValue)
+		slog.Error(fmt.Sprintf("❌ Нулевое расстояние стопа (ATR=%s) — сделку не открываю", atrValue))
 		b.setState(stateIdle)
 		return
 	}
 
 	equity, err := b.equity.Equity(ctx)
 	if err != nil {
-		log.Printf("❌ Не удалось получить эквити счёта: %v", err)
+		slog.Error(fmt.Sprintf("❌ Не удалось получить эквити счёта: %v", err))
 		b.setState(stateIdle)
 		return
 	}
 
 	if b.risk.DailyLossLimitHit(equity) {
-		log.Printf("🛑 Дневной лимит убытка достигнут — новые сделки не открываю")
+		slog.Warn(fmt.Sprintf("🛑 Дневной лимит убытка достигнут — новые сделки не открываю"))
 		b.notifyf("🛑 %s: дневной лимит убытка достигнут, новые сделки не открываю", b.exec.Symbol())
 		b.setState(stateIdle)
 		return
 	}
 
 	if b.risk.MaxDrawdownHit(equity) {
-		log.Printf("🛑 Просадка портфеля от пика превысила лимит — новые сделки не открываю")
+		slog.Warn(fmt.Sprintf("🛑 Просадка портфеля от пика превысила лимит — новые сделки не открываю"))
 		b.notifyf("🛑 %s: просадка портфеля от пика превысила лимит, новые сделки не открываю", b.exec.Symbol())
 		b.setState(stateIdle)
 		return
@@ -504,12 +504,12 @@ func (b *Breakout) openPosition(ctx context.Context, side posSide, reason string
 	if b.params.VolTargetPeriod > 0 && avgATR.IsPositive() && atrValue.GreaterThan(avgATR) {
 		scale := avgATR.Div(atrValue)
 		riskDollars = riskDollars.Mul(scale)
-		log.Printf("📉 Волатильность выше обычной (ATR=%s, среднее=%s) — риск уменьшен в %s раз",
-			atrValue.StringFixed(4), avgATR.StringFixed(4), atrValue.Div(avgATR).StringFixed(2))
+		slog.Info(fmt.Sprintf("📉 Волатильность выше обычной (ATR=%s, среднее=%s) — риск уменьшен в %s раз",
+			atrValue.StringFixed(4), avgATR.StringFixed(4), atrValue.Div(avgATR).StringFixed(2)))
 	}
 
 	if allowed, blockReason := b.risk.CanOpen(equity, riskDollars); !allowed {
-		log.Printf("🚫 Портфельный риск-лимит не позволяет открыть сделку: %s", blockReason)
+		slog.Warn(fmt.Sprintf("🚫 Портфельный риск-лимит не позволяет открыть сделку: %s", blockReason))
 		b.setState(stateIdle)
 		return
 	}
@@ -517,14 +517,14 @@ func (b *Breakout) openPosition(ctx context.Context, side posSide, reason string
 	qtyRaw := riskDollars.Div(stopDistance)
 	qty, err := b.exec.NormalizeQuantity(qtyRaw, refPrice)
 	if err != nil {
-		log.Printf("❌ Объём отклонён фильтрами биржи: %v", err)
+		slog.Error(fmt.Sprintf("❌ Объём отклонён фильтрами биржи: %v", err))
 		b.setState(stateIdle)
 		return
 	}
 
 	// Подчищаем хвосты прошлой сделки, чтобы чужой стоп не закрыл новый вход.
 	if err := b.exec.CancelAll(ctx); err != nil {
-		log.Printf("⚠️  Очистка ордеров перед входом: %v", err)
+		slog.Warn(fmt.Sprintf("⚠️  Очистка ордеров перед входом: %v", err))
 	}
 
 	var entry decimal.Decimal
@@ -534,7 +534,7 @@ func (b *Breakout) openPosition(ctx context.Context, side posSide, reason string
 		entry, err = b.exec.OpenShort(ctx, qty)
 	}
 	if err != nil {
-		log.Printf("❌ Вход (%s) не удался: %v", side, err)
+		slog.Error(fmt.Sprintf("❌ Вход (%s) не удался: %v", side, err))
 		// Ордер мог всё же исполниться до обрыва связи — проверяем позицию,
 		// иначе она осталась бы висеть без стопа и без учёта в автомате.
 		b.reconcile(ctx)
@@ -543,9 +543,9 @@ func (b *Breakout) openPosition(ctx context.Context, side posSide, reason string
 
 	stop, take, err := b.protect(ctx, side, entry, stopDistance)
 	if err != nil {
-		log.Printf("🚨 Позиция без защиты (%v) — закрываю по рынку", err)
+		slog.Error(fmt.Sprintf("🚨 Позиция без защиты (%v) — закрываю по рынку", err))
 		if cerr := b.exec.ClosePositionMarket(ctx); cerr != nil {
-			log.Printf("🚨🚨 НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ: %v — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", cerr)
+			slog.Error(fmt.Sprintf("🚨🚨 НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ: %v — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", cerr))
 			b.notifyf("🚨🚨 %s: НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ (%v) — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", b.exec.Symbol(), cerr)
 		}
 		b.setState(stateIdle)
@@ -569,9 +569,9 @@ func (b *Breakout) openPosition(ctx context.Context, side posSide, reason string
 	if equity.IsPositive() {
 		riskPct = actualRisk.Div(equity).Mul(decimal.NewFromInt(100))
 	}
-	log.Printf("🟢 В позиции (%s %s) | вход %s | объём %s | стоп %s | тейк %s | риск $%s (%s%% от эквити $%s)",
+	slog.Info(fmt.Sprintf("🟢 В позиции (%s %s) | вход %s | объём %s | стоп %s | тейк %s | риск $%s (%s%% от эквити $%s)",
 		reason, side, entry.StringFixed(2), qty, stop.StringFixed(2), take.StringFixed(2),
-		actualRisk.StringFixed(2), riskPct.StringFixed(2), equity.StringFixed(2))
+		actualRisk.StringFixed(2), riskPct.StringFixed(2), equity.StringFixed(2)))
 	b.notifyf("🟢 %s: %s %s\nВход %s | объём %s\nСтоп %s | Тейк %s\nРиск $%s (%s%% от эквити)",
 		b.exec.Symbol(), reason, side, entry.StringFixed(2), qty,
 		stop.StringFixed(2), take.StringFixed(2), actualRisk.StringFixed(2), riskPct.StringFixed(2))
@@ -614,14 +614,14 @@ func (b *Breakout) maybeMoveToBreakeven(ctx context.Context, c domain.Candle, si
 	}
 
 	if err := b.exec.CancelAll(ctx); err != nil {
-		log.Printf("⚠️  Снятие ордеров перед переносом в безубыток: %v", err)
+		slog.Warn(fmt.Sprintf("⚠️  Снятие ордеров перед переносом в безубыток: %v", err))
 	}
 	if err := b.exec.PlaceStopLoss(ctx, newStop); err != nil {
-		log.Printf("⚠️  Не удалось перенести стоп в безубыток (%v) — пробую восстановить исходный стоп", err)
+		slog.Warn(fmt.Sprintf("⚠️  Не удалось перенести стоп в безубыток (%v) — пробую восстановить исходный стоп", err))
 		if rerr := b.exec.PlaceStopLoss(ctx, stop); rerr != nil {
-			log.Printf("🚨 Позиция без защиты после неудачного переноса в безубыток (%v) — закрываю по рынку", rerr)
+			slog.Error(fmt.Sprintf("🚨 Позиция без защиты после неудачного переноса в безубыток (%v) — закрываю по рынку", rerr))
 			if cerr := b.exec.ClosePositionMarket(ctx); cerr != nil {
-				log.Printf("🚨🚨 НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ: %v — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", cerr)
+				slog.Error(fmt.Sprintf("🚨🚨 НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ: %v — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", cerr))
 				b.notifyf("🚨🚨 %s: НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ (%v) — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", b.exec.Symbol(), cerr)
 			}
 			// Если позиция уже была закрыта своим стопом/тейком до нашей
@@ -631,12 +631,12 @@ func (b *Breakout) maybeMoveToBreakeven(ctx context.Context, c domain.Candle, si
 			return
 		}
 		if terr := b.exec.PlaceTakeProfit(ctx, take); terr != nil {
-			log.Printf("⚠️  Тейк не восстановлен (%v); позиция защищена стопом, выход только по нему", terr)
+			slog.Warn(fmt.Sprintf("⚠️  Тейк не восстановлен (%v); позиция защищена стопом, выход только по нему", terr))
 		}
 		return
 	}
 	if err := b.exec.PlaceTakeProfit(ctx, take); err != nil {
-		log.Printf("⚠️  Тейк не восстановлен после переноса стопа в безубыток (%v); позиция защищена стопом", err)
+		slog.Warn(fmt.Sprintf("⚠️  Тейк не восстановлен после переноса стопа в безубыток (%v); позиция защищена стопом", err))
 	}
 
 	b.mu.Lock()
@@ -644,7 +644,7 @@ func (b *Breakout) maybeMoveToBreakeven(ctx context.Context, c domain.Candle, si
 	b.breakevenDone = true
 	b.mu.Unlock()
 
-	log.Printf("🔒 %s: стоп перенесён в безубыток (%s) после движения на %sR", b.exec.Symbol(), newStop.StringFixed(2), b.params.BreakevenTriggerR)
+	slog.Info(fmt.Sprintf("🔒 %s: стоп перенесён в безубыток (%s) после движения на %sR", b.exec.Symbol(), newStop.StringFixed(2), b.params.BreakevenTriggerR))
 	b.notifyf("🔒 %s: стоп перенесён в безубыток (%s)", b.exec.Symbol(), newStop.StringFixed(2))
 }
 
@@ -683,7 +683,7 @@ func (b *Breakout) protect(ctx context.Context, side posSide, entry, stopDistanc
 		return decimal.Zero, decimal.Zero, err
 	}
 	if err := b.exec.PlaceTakeProfit(ctx, take); err != nil {
-		log.Printf("⚠️  Тейк не выставлен (%v); позиция защищена стопом, выход только по нему", err)
+		slog.Warn(fmt.Sprintf("⚠️  Тейк не выставлен (%v); позиция защищена стопом, выход только по нему", err))
 	}
 	return stop, take, nil
 }
@@ -714,10 +714,10 @@ func (b *Breakout) OnOrderEvent(ctx context.Context, ev domain.OrderEvent) {
 
 		switch ev.Type {
 		case "STOP_MARKET":
-			log.Printf("🔔 Сработал СТОП по %s | PnL $%s (%sR)", ev.AvgPrice.StringFixed(2), ev.RealizedPnL.StringFixed(2), rMultiple.StringFixed(2))
+			slog.Info(fmt.Sprintf("🔔 Сработал СТОП по %s | PnL $%s (%sR)", ev.AvgPrice.StringFixed(2), ev.RealizedPnL.StringFixed(2), rMultiple.StringFixed(2)))
 			b.notifyf("🔔 %s: СТОП по %s\nPnL $%s (%sR)", b.exec.Symbol(), ev.AvgPrice.StringFixed(2), ev.RealizedPnL.StringFixed(2), rMultiple.StringFixed(2))
 		case "TAKE_PROFIT_MARKET":
-			log.Printf("🎯 Сработал ТЕЙК по %s | PnL $%s (%sR)", ev.AvgPrice.StringFixed(2), ev.RealizedPnL.StringFixed(2), rMultiple.StringFixed(2))
+			slog.Info(fmt.Sprintf("🎯 Сработал ТЕЙК по %s | PnL $%s (%sR)", ev.AvgPrice.StringFixed(2), ev.RealizedPnL.StringFixed(2), rMultiple.StringFixed(2)))
 			b.notifyf("🎯 %s: ТЕЙК по %s\nPnL $%s (%sR)", b.exec.Symbol(), ev.AvgPrice.StringFixed(2), ev.RealizedPnL.StringFixed(2), rMultiple.StringFixed(2))
 		}
 		// rp ненулевой только на закрывающих/уменьшающих позицию филах —
@@ -747,7 +747,7 @@ func (b *Breakout) reconcile(ctx context.Context) {
 
 	pos, err := b.exec.Position(ctx)
 	if err != nil {
-		log.Printf("⚠️  Сверка позиции не удалась: %v", err)
+		slog.Warn(fmt.Sprintf("⚠️  Сверка позиции не удалась: %v", err))
 		return
 	}
 
@@ -757,19 +757,19 @@ func (b *Breakout) reconcile(ctx context.Context) {
 		// зарезервированный риск. Реализованный PnL к этому моменту уже
 		// учтён в OnOrderEvent по полю rp — здесь его пересчитывать не нужно.
 		if err := b.exec.CancelAll(ctx); err != nil {
-			log.Printf("⚠️  Снятие ордеров после закрытия: %v", err)
+			slog.Warn(fmt.Sprintf("⚠️  Снятие ордеров после закрытия: %v", err))
 		}
 		b.risk.Release(b.exec.Symbol())
 		b.mu.Lock()
 		b.st = stateIdle
 		b.cooldownLeft = b.params.CooldownBars
 		b.mu.Unlock()
-		log.Printf("🟢 Позиция закрыта. Пауза %d свечей, затем снова ищу сигналы", b.params.CooldownBars)
+		slog.Info(fmt.Sprintf("🟢 Позиция закрыта. Пауза %d свечей, затем снова ищу сигналы", b.params.CooldownBars))
 
 	case !pos.IsFlat() && current == stateIdle:
 		// Позиция есть, а автомат считал себя плоским: пропущенное событие или
 		// ручная сделка. Принимаем её, чтобы не открыть вторую поверх.
-		log.Printf("⚠️  Обнаружена позиция %s вне учёта бота — беру под контроль", pos.Amount)
+		slog.Warn(fmt.Sprintf("⚠️  Обнаружена позиция %s вне учёта бота — беру под контроль", pos.Amount))
 		b.adopt(ctx, pos)
 	}
 }
@@ -788,11 +788,11 @@ func (b *Breakout) Recover(ctx context.Context) error {
 			return fmt.Errorf("очистка ордеров при старте: %w", err)
 		}
 		b.setState(stateIdle)
-		log.Println("✅ Стартовое состояние: позиций нет, книга ордеров чиста")
+		slog.Info("✅ Стартовое состояние: позиций нет, книга ордеров чиста")
 		return nil
 	}
 
-	log.Printf("⚠️  При старте найдена позиция: %s @ %s", pos.Amount, pos.EntryPrice)
+	slog.Warn(fmt.Sprintf("⚠️  При старте найдена позиция: %s @ %s", pos.Amount, pos.EntryPrice))
 	b.adopt(ctx, pos)
 	return nil
 }
@@ -807,7 +807,7 @@ func (b *Breakout) adopt(ctx context.Context, pos domain.Position) {
 
 	// Пересоздаём защиту: какие ордера остались от прошлого запуска — неизвестно.
 	if err := b.exec.CancelAll(ctx); err != nil {
-		log.Printf("⚠️  Снятие старых ордеров: %v", err)
+		slog.Warn(fmt.Sprintf("⚠️  Снятие старых ордеров: %v", err))
 	}
 
 	b.mu.Lock()
@@ -816,9 +816,9 @@ func (b *Breakout) adopt(ctx context.Context, pos domain.Position) {
 
 	stop, take, err := b.protect(ctx, side, pos.EntryPrice, stopDistance)
 	if err != nil {
-		log.Printf("🚨 Не удалось защитить принятую позицию (%v) — закрываю по рынку", err)
+		slog.Error(fmt.Sprintf("🚨 Не удалось защитить принятую позицию (%v) — закрываю по рынку", err))
 		if cerr := b.exec.ClosePositionMarket(ctx); cerr != nil {
-			log.Printf("🚨🚨 НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ: %v — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", cerr)
+			slog.Error(fmt.Sprintf("🚨🚨 НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ: %v — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", cerr))
 			b.notifyf("🚨🚨 %s: НЕ УДАЛОСЬ ЗАКРЫТЬ ПОЗИЦИЮ (%v) — ТРЕБУЕТСЯ РУЧНОЕ ВМЕШАТЕЛЬСТВО", b.exec.Symbol(), cerr)
 		}
 		b.setState(stateIdle)
@@ -838,7 +838,7 @@ func (b *Breakout) adopt(ctx context.Context, pos domain.Position) {
 	b.mu.Unlock()
 
 	b.setState(stateInPosition)
-	log.Printf("🟢 Позиция (%s) принята под управление, защита переставлена от %s", side, pos.EntryPrice.StringFixed(2))
+	slog.Info(fmt.Sprintf("🟢 Позиция (%s) принята под управление, защита переставлена от %s", side, pos.EntryPrice.StringFixed(2)))
 }
 
 // Shutdown готовит бота к остановке.
@@ -850,20 +850,20 @@ func (b *Breakout) adopt(ctx context.Context, pos domain.Position) {
 func (b *Breakout) Shutdown(ctx context.Context) {
 	pos, err := b.exec.Position(ctx)
 	if err != nil {
-		log.Printf("⚠️  Не удалось прочитать позицию при остановке: %v — ордера не трогаю", err)
+		slog.Warn(fmt.Sprintf("⚠️  Не удалось прочитать позицию при остановке: %v — ордера не трогаю", err))
 		return
 	}
 
 	if pos.IsFlat() {
 		if err := b.exec.CancelAll(ctx); err != nil {
-			log.Printf("⚠️  Снятие ордеров при остановке: %v", err)
+			slog.Warn(fmt.Sprintf("⚠️  Снятие ордеров при остановке: %v", err))
 		}
-		log.Println("✅ Позиций нет, ордера сняты")
+		slog.Info("✅ Позиций нет, ордера сняты")
 		return
 	}
 
-	log.Printf("⚠️  Позиция %s @ %s остаётся открытой; защитные ордера оставлены на бирже",
-		pos.Amount, pos.EntryPrice.StringFixed(2))
+	slog.Warn(fmt.Sprintf("⚠️  Позиция %s @ %s остаётся открытой; защитные ордера оставлены на бирже",
+		pos.Amount, pos.EntryPrice.StringFixed(2)))
 }
 
 func (b *Breakout) setState(s state) {

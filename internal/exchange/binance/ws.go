@@ -3,7 +3,7 @@ package binance
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"trading-bot/internal/domain"
@@ -30,7 +30,7 @@ func StreamKlines(ctx context.Context, symbol, interval string, out chan<- domai
 			handler := func(event *futures.WsKlineEvent) {
 				candle, err := toCandle(event)
 				if err != nil {
-					log.Printf("⚠️  Свеча %s пропущена: %v", symbol, err)
+					slog.Warn(fmt.Sprintf("⚠️  Свеча %s пропущена: %v", symbol, err))
 					return
 				}
 				// Неблокирующая отправка: обработчик выполняется в горутине
@@ -39,31 +39,31 @@ func StreamKlines(ctx context.Context, symbol, interval string, out chan<- domai
 				select {
 				case out <- candle:
 				default:
-					log.Printf("⚠️  Канал свечей переполнен, тик %s отброшен", symbol)
+					slog.Warn(fmt.Sprintf("⚠️  Канал свечей переполнен, тик %s отброшен", symbol))
 				}
 			}
 
 			errHandler := func(err error) {
-				log.Printf("❌ Ошибка потока свечей %s: %v", symbol, err)
+				slog.Error(fmt.Sprintf("❌ Ошибка потока свечей %s: %v", symbol, err))
 			}
 
 			doneC, stopC, err := futures.WsKlineServe(symbol, interval, handler, errHandler)
 			if err != nil {
 				d := b.Duration()
-				log.Printf("❌ Не удалось подключиться к потоку свечей: %v (повтор через %s)", err, d.Round(time.Second))
+				slog.Error(fmt.Sprintf("❌ Не удалось подключиться к потоку свечей: %v (повтор через %s)", err, d.Round(time.Second)))
 				if !sleepCtx(ctx, d) {
 					return
 				}
 				continue
 			}
 
-			log.Printf("📡 Поток свечей %s (%s) подключен", symbol, interval)
+			slog.Info(fmt.Sprintf("📡 Поток свечей %s (%s) подключен", symbol, interval))
 			b.Reset()
 
 			if waitStream(ctx, doneC, stopC) {
 				return // остановка по ctx
 			}
-			log.Printf("🔌 Поток свечей %s разорван, переподключаюсь...", symbol)
+			slog.Info(fmt.Sprintf("🔌 Поток свечей %s разорван, переподключаюсь...", symbol))
 		}
 	}()
 

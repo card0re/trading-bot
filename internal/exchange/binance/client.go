@@ -3,7 +3,7 @@ package binance
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"trading-bot/internal/config"
@@ -55,7 +55,7 @@ func SetupSymbol(ctx context.Context, client *futures.Client, symbol string, lev
 	if err != nil {
 		return fmt.Errorf("установка плеча %dx для %s: %w", leverage, symbol, err)
 	}
-	log.Printf("⚙️  %s: плечо %dx, маржа %s", symbol, lev.Leverage, marginType)
+	slog.Info(fmt.Sprintf("⚙️  %s: плечо %dx, маржа %s", symbol, lev.Leverage, marginType))
 	return nil
 }
 

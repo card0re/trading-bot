@@ -105,6 +105,18 @@ list, including the walk-forward evidence behind each default). Highlights:
 `internal/config.Load()` validates everything and fails fast on startup
 with a clear error rather than trading with a nonsensical config.
 
+## Logging
+
+Uses `log/slog` with a text handler (`level=INFO msg="..."`), level
+controlled by `LOG_LEVEL` (`debug`/`info`/`warn`/`error`, default `info`).
+This buys two things: `journalctl -u trading-bot | grep level=ERROR` to
+grep out real problems, and `LOG_LEVEL=warn` to cut volume at the source
+when the default is too chatty. It does *not* give per-line journalctl `-p`
+priority filtering — that needs journald's native protocol, which plain
+stdout logging doesn't speak; text-grepping is the honest capability here.
+Startup-fatal config errors still use the stdlib `log.Fatal` — nothing
+downstream needs those level-filtered, they always abort the process.
+
 ## Metrics
 
 Set `METRICS_ADDR` (e.g. `:9090`) to expose a `/metrics` endpoint in

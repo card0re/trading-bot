@@ -2,7 +2,8 @@ package binance
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"trading-bot/internal/domain"
@@ -35,7 +36,7 @@ func StreamUserData(
 			listenKey, err := client.NewStartUserStreamService().Do(ctx)
 			if err != nil {
 				d := b.Duration()
-				log.Printf("❌ Получение listenKey: %v (повтор через %s)", err, d.Round(time.Second))
+				slog.Error(fmt.Sprintf("❌ Получение listenKey: %v (повтор через %s)", err, d.Round(time.Second)))
 				if !sleepCtx(ctx, d) {
 					return
 				}
@@ -71,20 +72,20 @@ func StreamUserData(
 			}
 
 			errHandler := func(err error) {
-				log.Printf("❌ Ошибка приватного потока: %v", err)
+				slog.Error(fmt.Sprintf("❌ Ошибка приватного потока: %v", err))
 			}
 
 			doneC, stopC, err := futures.WsUserDataServe(listenKey, handler, errHandler)
 			if err != nil {
 				d := b.Duration()
-				log.Printf("❌ Подключение приватного потока: %v (повтор через %s)", err, d.Round(time.Second))
+				slog.Error(fmt.Sprintf("❌ Подключение приватного потока: %v (повтор через %s)", err, d.Round(time.Second)))
 				if !sleepCtx(ctx, d) {
 					return
 				}
 				continue
 			}
 
-			log.Println("🔐 Приватный поток (User Data) подключен")
+			slog.Info("🔐 Приватный поток (User Data) подключен")
 			b.Reset()
 
 			// Keepalive живёт ровно столько, сколько текущее соединение.
@@ -101,7 +102,7 @@ func StreamUserData(
 			if stopped {
 				return
 			}
-			log.Println("🔌 Приватный поток разорван, переподключаюсь...")
+			slog.Info("🔌 Приватный поток разорван, переподключаюсь...")
 		}
 	}()
 
@@ -120,10 +121,10 @@ func keepAlive(ctx context.Context, client *futures.Client, listenKey string, ev
 			err := client.NewKeepaliveUserStreamService().ListenKey(listenKey).Do(ctx)
 			if err != nil {
 				// Поток переподключится и возьмёт новый ключ.
-				log.Printf("⚠️  Продление listenKey не удалось: %v", err)
+				slog.Warn(fmt.Sprintf("⚠️  Продление listenKey не удалось: %v", err))
 				continue
 			}
-			log.Println("🔑 listenKey продлён")
+			slog.Info("🔑 listenKey продлён")
 		}
 	}
 }
@@ -134,6 +135,6 @@ func closeListenKey(client *futures.Client, listenKey string) {
 	defer cancel()
 
 	if err := client.NewCloseUserStreamService().ListenKey(listenKey).Do(ctx); err != nil {
-		log.Printf("⚠️  Закрытие listenKey: %v", err)
+		slog.Warn(fmt.Sprintf("⚠️  Закрытие listenKey: %v", err))
 	}
 }
