@@ -679,6 +679,12 @@ func (b *Breakout) protect(ctx context.Context, side posSide, entry, stopDistanc
 			stop, take, entry, side)
 	}
 
+	// Стоп и тейк не выставляются параллельно, хотя это независимые REST-
+	// вызовы и сэкономило бы один network round-trip: если бы стоп не
+	// выставился, а тейк — успел, позиция осталась бы защищена только
+	// тейком — риск неограничен вниз до следующей сверки. Здесь именно тот
+	// случай, где скорость стоит меньше правильности (см. также
+	// комментарий у placeConditional в internal/exchange/binance/orders.go).
 	if err := b.exec.PlaceStopLoss(ctx, stop); err != nil {
 		return decimal.Zero, decimal.Zero, err
 	}
