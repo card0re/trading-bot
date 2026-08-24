@@ -38,6 +38,18 @@ this basket recently; there isn't enough out-of-sample data to validate this
 idea right now, positively or negatively. See the doc comment on
 `buildCarryGrid` in `cmd/tune/main.go`.
 
+Tried and **rejected** — with a methodological lesson worth flagging:
+pairs trading / stat-arb (`cmd/pairs`, `internal/pairs`) — z-score
+mean-reversion on the log-spread between correlated coins, dollar-neutral.
+A coarse walk-forward (180d holdout, 3 folds) looked genuinely promising:
+the best candidate was profitable on all 3 folds. A finer one (365d
+holdout, 6 folds) broke it — a real losing stretch (Oct 2025-Feb 2026,
+-5% to -14% across the top candidates) had been hiding inside a single
+60-day fold boundary in the coarse pass. Not deployed. Takeaway for any
+future idea tested here: one fold split isn't enough to trust
+"profitable on every fold" — recheck on a different split before
+believing it.
+
 ## Architecture
 
 ```
