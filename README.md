@@ -28,6 +28,16 @@ basket's current daily ADX. Walk-forward validated the same way as
 everything else — it doesn't hold up out-of-sample; see the doc comment at
 the top of `cmd/regime/main.go` for the numbers.
 
+Tried and **inconclusive** (not "doesn't work" — genuinely can't tell yet):
+funding-carry as its own isolated strategy (`cmd/tune -mode carry`, breakout
+entry made unreachable so only the funding-rate signal can fire). It traded
+plenty in-sample (2023-2025) with mixed results, but on the last 180 days —
+210 (symbol × fold × threshold) cells checked — 198 had zero trades and none
+had more than one. Extreme funding rate essentially stopped happening on
+this basket recently; there isn't enough out-of-sample data to validate this
+idea right now, positively or negatively. See the doc comment on
+`buildCarryGrid` in `cmd/tune/main.go`.
+
 ## Architecture
 
 ```

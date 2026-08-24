@@ -41,10 +41,13 @@ var symbols = []string{
 	"SOLUSDT", "XRPUSDT", "ADAUSDT", "LINKUSDT", // средняя
 }
 
-const (
-	startEquityF    = 10000.0
-	minTradesPerSym = 15 // отсекаем комбинации, где по монете почти нет сделок — статистика ничего не значит
-)
+const startEquityF = 10000.0
+
+// minTradesPerSym отсекает комбинации, где по монете почти нет сделок —
+// статистика ничего не значит. Не константа: -mode carry (см. buildCarryGrid)
+// торгует по редкому событию (экстремальный funding), сделок на порядок
+// меньше, чем у пробоя — с тем же порогом 15 сетка отфильтровала бы ВСЁ.
+var minTradesPerSym = 15
 
 // totalDays/holdoutDays — глубина истории и размер отложенного окна.
 // Настраиваются флагами -days/-holdout (см. main); значения по умолчанию —
@@ -67,6 +70,9 @@ func main() {
 	holdoutFlag := flag.Int("holdout", holdoutDays, "размер отложенного окна (out-of-sample), дней")
 	foldsFlag := flag.Int("folds", 3, "на сколько последовательных периодов делить holdout для walk-forward "+
 		"проверки устойчивости (1 = старое поведение, весь holdout одним куском)")
+	modeFlag := flag.String("mode", "breakout", `"breakout" (по умолчанию) — обычная сетка пробоя+тренда; `+
+		`"carry" — пробойный и mean-reversion входы отключены (BreakoutPct недостижим, MeanRevATRMultiplier=0), `+
+		`остаётся только вход "на funding carry" сам по себе, изолированно от остальных сигналов`)
 	flag.Parse()
 	interval = *intervalFlag
 	totalDays = *daysFlag
@@ -74,14 +80,21 @@ func main() {
 	if *foldsFlag < 1 {
 		log.Fatal("❌ -folds должен быть >= 1")
 	}
+	if *modeFlag != "breakout" && *modeFlag != "carry" {
+		log.Fatalf("❌ -mode должен быть \"breakout\" или \"carry\", получено %q", *modeFlag)
+	}
 
-	if err := run(*cacheDir, *topN, *foldsFlag); err != nil {
+	if err := run(*cacheDir, *topN, *foldsFlag, *modeFlag); err != nil {
 		log.Fatalf("❌ %v", err)
 	}
 }
 
-func run(cacheDir string, topN, folds int) error {
+func run(cacheDir string, topN, folds int, mode string) error {
 	log.SetOutput(io.Discard) // глушим лог стратегии — на сетке из тысяч прогонов это гигабайты шума
+
+	if mode == "carry" {
+		minTradesPerSym = 5 // редкое событие (экстремальный funding) — сделок на порядок меньше, чем у пробоя
+	}
 
 	futures.UseTestnet = false
 	client := binance.NewFuturesClient("", "")
@@ -113,6 +126,9 @@ func run(cacheDir string, topN, folds int) error {
 	splitTime := time.Now().AddDate(0, 0, -holdoutDays)
 
 	grid := buildGrid()
+	if mode == "carry" {
+		grid = buildCarryGrid()
+	}
 	fmt.Printf("🔍 Комбинаций в сетке: %d (× %d символов = %d прогонов in-sample)\n\n",
 		len(grid), len(symbols), len(grid)*len(symbols))
 
@@ -452,6 +468,66 @@ func buildGrid() []strategy.Params {
 				p.TrendStrengthMinADX = decimal.NewFromFloat(adx)
 				p.VolTargetPeriod = vt
 				grid = append(grid, p)
+			}
+		}
+	}
+	return grid
+}
+
+// buildCarryGrid изолирует вход "на funding carry" от всех остальных
+// сигналов: BreakoutPct=1000 (1000%) делает пробойный триггер физически
+// недостижимым любым реальным движением цены, MeanRevATRMultiplier=0
+// выключает возврат к среднему явно (его собственное условие входа и так
+// требует TrendStrengthMinADX>0, здесь он тоже 0 — вторая, независимая
+// причина, почему он не сработает). Внутри switch в internal/strategy/
+// brain.go (case longOK/shortOK/meanRevLongOK/meanRevShortOK/
+// fundingCarryLongOK/fundingCarryShortOK) остаётся достижим только carry —
+// проверяем его собственный эдж в изоляции, а не как довесок к пробою.
+//
+// ВАЖНО: это НЕ маркет-нейтральный carry (лонг спот + шорт перп) — это всё
+// ещё направленная сделка (голый перп без хеджа), просто сигнал входа другой
+// (экстремальность funding rate, а не пробой цены). Управляется тем же
+// ATR-стопом/тейком и vol-targeting, что и пробой — ценовой риск НЕ снят.
+//
+// ИТОГ (25.08.2026, -days 1095 -holdout 180 -folds 3): НЕ ПРОВЕРЯЕМО прямо
+// сейчас, а не "не работает" — это другой вывод. In-sample (2023-2025,
+// ~2.5 года) сигнал реально торговал: у лучшей комбинации 15-54 сделки на
+// символ, результат смешанный (ETH +7.6%, ADA +8.6%, но BNB -3.8%,
+// SOL -5.6%). На holdout (последние 180 дней, 3 фолда × 7 символов × 10
+// кандидатов = 210 ячеек) — 198 ячеек с 0 сделок, 12 с ровно 1, ни одной с
+// 2+. Даже самый мягкий проверенный порог (0.0003 = 0.03%) почти не
+// срабатывал. Экстремальный funding rate по этой корзине практически
+// перестал случаться в последние ~6 месяцев (согласуется с общей находкой
+// сессии — рынок ушёл в затишье/боковик, см. .env.example и
+// cmd/regime/main.go) — статистики out-of-sample для ЛЮБОГО вывода
+// (позитивного ИЛИ негативного) сейчас недостаточно. НЕ ДЕПЛОИТЬ. Не
+// пересматривать раньше, чем наберётся реальная holdout-статистика —
+// пересматривать сетку порогов сейчас бессмысленно, проблема не в пороге.
+func buildCarryGrid() []strategy.Params {
+	thresholds := []float64{0.0003, 0.0005, 0.0008, 0.001, 0.0015}
+	atrMults := []float64{2.0, 3.0}
+	rrs := []float64{1.0, 1.5, 2.0}
+
+	var grid []strategy.Params
+	for _, th := range thresholds {
+		for _, am := range atrMults {
+			for _, rr := range rrs {
+				grid = append(grid, strategy.Params{
+					LookbackBars:         30,
+					BreakoutPct:          decimal.NewFromInt(1000), // недостижимо — пробойный вход выключен
+					CooldownBars:         3,
+					TrendEMAPeriod:       100,
+					ATRPeriod:            14,
+					VolumeAvgPeriod:      20,
+					VolumeMultiplier:     decimal.NewFromFloat(2.0), // не важно, пробой всё равно недостижим
+					ATRStopMultiplier:    decimal.NewFromFloat(am),
+					RiskRewardRatio:      decimal.NewFromFloat(rr),
+					RiskPerTradePct:      decimal.NewFromFloat(1.0),
+					TrendStrengthMinADX:  decimal.Zero, // meanrev и так не сработает без этого; пробою всё равно не дойти
+					MeanRevATRMultiplier: decimal.Zero,
+					FundingCarryMinRate:  decimal.NewFromFloat(th),
+					VolTargetPeriod:      50,
+				})
 			}
 		}
 	}
