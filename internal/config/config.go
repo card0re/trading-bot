@@ -60,6 +60,11 @@ type AppConfig struct {
 	// См. internal/strategy.Params.
 	VolTargetPeriod int
 
+	// OrderFlowMinRatio — подтверждение пробоя дисбалансом потока ордеров
+	// (доля объёма от агрессивных покупателей). 0 — выключено. См.
+	// internal/strategy.Params.
+	OrderFlowMinRatio decimal.Decimal
+
 	// Риск-менеджмент — общий на все символы сразу (internal/risk.Manager).
 	RiskPerTradePct     decimal.Decimal // риск на одну сделку, % от эквити
 	PortfolioRiskCapPct decimal.Decimal // максимум суммарного открытого риска по всем символам, % от эквити
@@ -191,6 +196,14 @@ func Load() (*AppConfig, error) {
 	setDecimal(&cfg.MeanRevATRMultiplier, "MEAN_REV_ATR_MULTIPLIER", "0")
 	setDecimal(&cfg.FundingCarryMinRate, "FUNDING_CARRY_MIN_RATE", "0.001")
 	setInt(&cfg.VolTargetPeriod, "VOL_TARGET_PERIOD", 50)
+	// 0.6 — walk-forward победитель (25.08.2026, cmd/tune -mode orderflow, 3
+	// года, holdout 6 месяцев): любой порог 0.55-0.7 дал ОДИНАКОВЫЙ набор
+	// сделок (граница потока ордеров между "да" и "нет" резкая, не размытая
+	// в этом диапазоне) — 0.6 взят серединой найденного плато, не краем.
+	// Улучшил walk-forward score с -5.72 до -5.30 (всё ещё отрицательно —
+	// не делает стратегию прибыльной сам по себе, но заметно и стабильно
+	// лучше без фильтра, тот же характер эффекта, что у ADX/VolTarget).
+	setDecimal(&cfg.OrderFlowMinRatio, "ORDER_FLOW_MIN_RATIO", "0.6")
 	setDecimal(&cfg.RiskPerTradePct, "RISK_PER_TRADE_PCT", "1.0")
 	setDecimal(&cfg.PortfolioRiskCapPct, "PORTFOLIO_RISK_CAP_PCT", "4.5")
 	setDecimal(&cfg.DailyLossLimitPct, "DAILY_LOSS_LIMIT_PCT", "3.0")
@@ -276,6 +289,9 @@ func (c *AppConfig) validate() error {
 	}
 	if c.VolTargetPeriod < 0 {
 		return fmt.Errorf("VOL_TARGET_PERIOD не может быть отрицательным")
+	}
+	if c.OrderFlowMinRatio.IsNegative() || c.OrderFlowMinRatio.GreaterThan(decimal.NewFromInt(1)) {
+		return fmt.Errorf("ORDER_FLOW_MIN_RATIO должен быть в диапазоне 0..1 (0 — выключено)")
 	}
 	if c.RiskPerTradePct.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("RISK_PER_TRADE_PCT должен быть > 0")

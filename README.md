@@ -10,9 +10,10 @@ rigorous walk-forward validation over 3 years of history (holdout: last 6
 months, split into 3 independent periods, real fees + slippage) shows a
 negative result on every out-of-sample period, even with every improvement
 tried (ADX trend-strength filter, funding-rate carry entry, volatility-
-targeted sizing). This looks like a market-regime problem (range-bound
-market), not a parameter or symbol problem — see comments in
-`.env.example` and `internal/strategy/brain.go` for the full trail.
+targeted sizing, order-flow confirmation — see below). This looks like a
+market-regime problem (range-bound market), not a parameter or symbol
+problem — see comments in `.env.example` and `internal/strategy/brain.go`
+for the full trail.
 
 The bot keeps running on testnet to collect more data. **Do not point it at
 mainnet funds based on the current backtest results.**
@@ -21,6 +22,19 @@ A second, unrelated strategy class — cross-sectional momentum rotation
 (`cmd/rotationbot`) — runs alongside it as a **paper-only shadow bot** (no
 real orders, virtual portfolio marked to real prices) to see if it holds up
 live. See `cmd/rotation/main.go` for the rationale.
+
+**Adopted** (real, walk-forward-confirmed improvement — not a fix on its
+own): order-flow confirmation (`OrderFlowMinRatio` / `ORDER_FLOW_MIN_RATIO`
+in `internal/strategy.Params`). Breakout entries now also require the
+breakout candle's taker-buy ratio to actually confirm direction, not just
+exceed average volume — a free proxy for order-book imbalance from data
+Binance already provides in every candle (real L2 depth has no historical
+REST endpoint on Binance at all, so it isn't backtestable the same way; see
+`domain.Candle.TakerBuyVolume`). Isolated test (`cmd/tune -mode orderflow`,
+same 3yr/6mo/3-fold methodology): walk-forward score improved from -5.72 to
+-5.30 — same character as the ADX filter and vol-targeting: a real,
+consistent improvement, still not enough to make the strategy profitable
+on this holdout window by itself.
 
 Tried and **rejected**: a regime-switching allocator (`cmd/regime`) that
 would hand the whole account to whichever of Breakout/Rotation suits the

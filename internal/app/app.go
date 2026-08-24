@@ -95,6 +95,7 @@ func New(ctx context.Context, cfg *config.AppConfig) (*Runner, error) {
 			MeanRevATRMultiplier: cfg.MeanRevATRMultiplier,
 			FundingCarryMinRate:  cfg.FundingCarryMinRate,
 			VolTargetPeriod:      cfg.VolTargetPeriod,
+			OrderFlowMinRatio:    cfg.OrderFlowMinRatio,
 		})
 		if notifier != nil {
 			bot.SetNotifier(notifier)

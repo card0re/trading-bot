@@ -72,7 +72,9 @@ func main() {
 		"проверки устойчивости (1 = старое поведение, весь holdout одним куском)")
 	modeFlag := flag.String("mode", "breakout", `"breakout" (по умолчанию) — обычная сетка пробоя+тренда; `+
 		`"carry" — пробойный и mean-reversion входы отключены (BreakoutPct недостижим, MeanRevATRMultiplier=0), `+
-		`остаётся только вход "на funding carry" сам по себе, изолированно от остальных сигналов`)
+		`остаётся только вход "на funding carry" сам по себе, изолированно от остальных сигналов; `+
+		`"orderflow" — остальные параметры зафиксированы на уже найденном лучшем наборе, перебирается только `+
+		`OrderFlowMinRatio (подтверждение пробоя дисбалансом потока ордеров)`)
 	flag.Parse()
 	interval = *intervalFlag
 	totalDays = *daysFlag
@@ -80,8 +82,8 @@ func main() {
 	if *foldsFlag < 1 {
 		log.Fatal("❌ -folds должен быть >= 1")
 	}
-	if *modeFlag != "breakout" && *modeFlag != "carry" {
-		log.Fatalf("❌ -mode должен быть \"breakout\" или \"carry\", получено %q", *modeFlag)
+	if *modeFlag != "breakout" && *modeFlag != "carry" && *modeFlag != "orderflow" {
+		log.Fatalf("❌ -mode должен быть \"breakout\", \"carry\" или \"orderflow\", получено %q", *modeFlag)
 	}
 
 	if err := run(*cacheDir, *topN, *foldsFlag, *modeFlag); err != nil {
@@ -126,8 +128,11 @@ func run(cacheDir string, topN, folds int, mode string) error {
 	splitTime := time.Now().AddDate(0, 0, -holdoutDays)
 
 	grid := buildGrid()
-	if mode == "carry" {
+	switch mode {
+	case "carry":
 		grid = buildCarryGrid()
+	case "orderflow":
+		grid = buildOrderFlowGrid()
 	}
 	fmt.Printf("🔍 Комбинаций в сетке: %d (× %d символов = %d прогонов in-sample)\n\n",
 		len(grid), len(symbols), len(grid)*len(symbols))
@@ -389,11 +394,15 @@ func describeParams(p strategy.Params) string {
 	if p.VolTargetPeriod > 0 {
 		volTarget = fmt.Sprintf("%d", p.VolTargetPeriod)
 	}
+	orderFlow := "off"
+	if !p.OrderFlowMinRatio.IsZero() {
+		orderFlow = p.OrderFlowMinRatio.String()
+	}
 	return fmt.Sprintf(
-		"LB=%d BreakoutPct=%s TrendEMA=%d VolMult=%s ATRStopMult=%s RR=%s MinADX=%s Breakeven=%s MeanRev=%s Carry=%s VolTarget=%s",
+		"LB=%d BreakoutPct=%s TrendEMA=%d VolMult=%s ATRStopMult=%s RR=%s MinADX=%s Breakeven=%s MeanRev=%s Carry=%s VolTarget=%s OrderFlow=%s",
 		p.LookbackBars, p.BreakoutPct.StringFixed(2), p.TrendEMAPeriod,
 		p.VolumeMultiplier.StringFixed(2), p.ATRStopMultiplier.StringFixed(2), p.RiskRewardRatio.StringFixed(2),
-		adx, be, meanRev, carry, volTarget)
+		adx, be, meanRev, carry, volTarget, orderFlow)
 }
 
 // baseCandidates — топ-10 по holdout из первого широкого прогона (270д,
@@ -530,6 +539,37 @@ func buildCarryGrid() []strategy.Params {
 				})
 			}
 		}
+	}
+	return grid
+}
+
+// buildOrderFlowGrid — как buildCarryGrid: остальные параметры зафиксированы
+// на уже найденном walk-forward победителе (см. .env.example), перебирается
+// только OrderFlowMinRatio, чтобы честно ответить на один сфокусированный
+// вопрос — "помогает ли подтверждение потоком ордеров ПОВЕРХ уже лучшей
+// версии пробоя", а не размывать вывод по всей исторической сетке заново.
+func buildOrderFlowGrid() []strategy.Params {
+	ratios := []float64{0, 0.55, 0.6, 0.65, 0.7} // 0 = фильтр выключен (контрольная точка)
+
+	var grid []strategy.Params
+	for _, r := range ratios {
+		grid = append(grid, strategy.Params{
+			LookbackBars:        30,
+			BreakoutPct:         decimal.NewFromFloat(0.05),
+			CooldownBars:        3,
+			TrendEMAPeriod:      100,
+			ATRPeriod:           14,
+			VolumeAvgPeriod:     20,
+			VolumeMultiplier:    decimal.NewFromFloat(2.0),
+			ATRStopMultiplier:   decimal.NewFromFloat(3.0),
+			RiskRewardRatio:     decimal.NewFromFloat(1.0),
+			RiskPerTradePct:     decimal.NewFromFloat(1.0),
+			ADXPeriod:           14,
+			TrendStrengthMinADX: decimal.NewFromFloat(25),
+			FundingCarryMinRate: decimal.NewFromFloat(0.001),
+			VolTargetPeriod:     50,
+			OrderFlowMinRatio:   decimal.NewFromFloat(r),
+		})
 	}
 	return grid
 }

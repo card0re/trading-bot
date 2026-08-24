@@ -233,6 +233,7 @@ func defaultParams() strategy.Params {
 		TrendStrengthMinADX: decimal.NewFromFloat(25),
 		FundingCarryMinRate: decimal.NewFromFloat(0.001),
 		VolTargetPeriod:     50,
+		OrderFlowMinRatio:   decimal.NewFromFloat(0.6),
 	}
 }
 

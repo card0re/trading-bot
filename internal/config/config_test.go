@@ -28,6 +28,7 @@ func validConfig() *AppConfig {
 		MeanRevATRMultiplier: decimal.Zero,
 		FundingCarryMinRate:  decimal.NewFromFloat(0.001),
 		VolTargetPeriod:      50,
+		OrderFlowMinRatio:    decimal.NewFromFloat(0.6),
 		RiskPerTradePct:      decimal.NewFromFloat(1.0),
 		PortfolioRiskCapPct:  decimal.NewFromFloat(4.5),
 		DailyLossLimitPct:    decimal.NewFromFloat(3.0),
@@ -67,6 +68,8 @@ func TestValidateRejects(t *testing.T) {
 		{"отрицательный MeanRevATRMultiplier", func(c *AppConfig) { c.MeanRevATRMultiplier = decimal.NewFromFloat(-1) }},
 		{"отрицательный FundingCarryMinRate", func(c *AppConfig) { c.FundingCarryMinRate = decimal.NewFromFloat(-1) }},
 		{"отрицательный VolTargetPeriod", func(c *AppConfig) { c.VolTargetPeriod = -1 }},
+		{"отрицательный OrderFlowMinRatio", func(c *AppConfig) { c.OrderFlowMinRatio = decimal.NewFromFloat(-0.1) }},
+		{"OrderFlowMinRatio > 1", func(c *AppConfig) { c.OrderFlowMinRatio = decimal.NewFromFloat(1.1) }},
 		{"RiskPerTradePct <= 0", func(c *AppConfig) { c.RiskPerTradePct = decimal.Zero }},
 		{"PortfolioRiskCapPct < RiskPerTradePct", func(c *AppConfig) {
 			c.RiskPerTradePct = decimal.NewFromFloat(5)
