@@ -1,0 +1,23 @@
+# Секреты — никогда не коммитить
+.env
+.env.local
+*.key
+*.pem
+
+# Сборка
+/bot
+/bot.exe
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+
+# Локальное состояние (генерируется при запуске, не код)
+rotation_state.json
+*.tmp
+
+# Артефакты стороннего /graphify инструмента, не код проекта
+graphify-out/
