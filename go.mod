@@ -1,6 +1,6 @@
 module trading-bot
 
-go 1.26.1
+go 1.26.6
 
 require (
 	github.com/adshao/go-binance/v2 v2.8.12

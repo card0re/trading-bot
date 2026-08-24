@@ -86,6 +86,11 @@ type AppConfig struct {
 	// машине. Пусто — команда /status просто не покажет раздел про ротацию,
 	// это не ошибка (ротация — отдельный необязательный процесс).
 	RotationStatePath string
+
+	// MetricsAddr — адрес (например ":9090"), на котором отдавать /metrics
+	// в формате Prometheus. Пусто (по умолчанию) — эндпоинт не поднимается,
+	// бот не слушает порт, пока явно не попросили.
+	MetricsAddr string
 }
 
 // Load читает .env (если есть) и системные переменные, валидируя результат.
@@ -138,10 +143,25 @@ func Load() (*AppConfig, error) {
 		return nil, fmt.Errorf("не заданы ключи API (testnet=%v)", cfg.UseTestnet)
 	}
 
+	// setInt/setDecimal — первая ошибка парсинга побеждает и дальше просто
+	// ничего не делает (err уже не nil), поэтому ниже можно писать один
+	// вызов на переменную вместо if/err на каждую — Load читал одинаковый
+	// трёхстрочный блок ~20 раз подряд.
 	var err error
-	if cfg.Leverage, err = envInt("LEVERAGE", 3); err != nil {
-		return nil, err
+	setInt := func(dst *int, key string, def int) {
+		if err != nil {
+			return
+		}
+		*dst, err = envInt(key, def)
 	}
+	setDecimal := func(dst *decimal.Decimal, key, def string) {
+		if err != nil {
+			return
+		}
+		*dst, err = envDecimal(key, def)
+	}
+
+	setInt(&cfg.Leverage, "LEVERAGE", 3)
 	// Значения ниже — победитель walk-forward подбора параметров (7 монет
 	// выше, 3 года истории, 1h, holdout — последние 6 месяцев в 3 отдельных
 	// периодах, честные комиссии + проскальзывание). MinADX, FundingCarry и
@@ -155,73 +175,39 @@ func Load() (*AppConfig, error) {
 	// оставлены выключенными. Итог всё ещё отрицательный на последних 6
 	// месяцах (см. предупреждение у Symbols) — это лучшее из проверенного,
 	// не гарантия.
-	if cfg.LookbackBars, err = envInt("LOOKBACK_BARS", 30); err != nil {
-		return nil, err
-	}
-	if cfg.CooldownBars, err = envInt("COOLDOWN_BARS", 3); err != nil {
-		return nil, err
-	}
-	if cfg.TrendEMAPeriod, err = envInt("TREND_EMA_PERIOD", 100); err != nil {
-		return nil, err
-	}
-	if cfg.ATRPeriod, err = envInt("ATR_PERIOD", 14); err != nil {
-		return nil, err
-	}
-	if cfg.VolumeAvgPeriod, err = envInt("VOLUME_AVG_PERIOD", 20); err != nil {
-		return nil, err
-	}
-	if cfg.ADXPeriod, err = envInt("ADX_PERIOD", 14); err != nil {
-		return nil, err
-	}
+	setInt(&cfg.LookbackBars, "LOOKBACK_BARS", 30)
+	setInt(&cfg.CooldownBars, "COOLDOWN_BARS", 3)
+	setInt(&cfg.TrendEMAPeriod, "TREND_EMA_PERIOD", 100)
+	setInt(&cfg.ATRPeriod, "ATR_PERIOD", 14)
+	setInt(&cfg.VolumeAvgPeriod, "VOLUME_AVG_PERIOD", 20)
+	setInt(&cfg.ADXPeriod, "ADX_PERIOD", 14)
 
-	if cfg.BreakoutPct, err = envDecimal("BREAKOUT_PCT", "0.05"); err != nil {
-		return nil, err
-	}
-	if cfg.VolumeMultiplier, err = envDecimal("VOLUME_MULTIPLIER", "2.0"); err != nil {
-		return nil, err
-	}
-	if cfg.ATRStopMultiplier, err = envDecimal("ATR_STOP_MULTIPLIER", "3.0"); err != nil {
-		return nil, err
-	}
-	if cfg.RiskRewardRatio, err = envDecimal("RISK_REWARD_RATIO", "1.0"); err != nil {
-		return nil, err
-	}
-	if cfg.TrendStrengthMinADX, err = envDecimal("TREND_STRENGTH_MIN_ADX", "25"); err != nil {
-		return nil, err
-	}
-	if cfg.BreakevenTriggerR, err = envDecimal("BREAKEVEN_TRIGGER_R", "0"); err != nil {
-		return nil, err
-	}
-	if cfg.MeanRevATRMultiplier, err = envDecimal("MEAN_REV_ATR_MULTIPLIER", "0"); err != nil {
-		return nil, err
-	}
-	if cfg.FundingCarryMinRate, err = envDecimal("FUNDING_CARRY_MIN_RATE", "0.001"); err != nil {
-		return nil, err
-	}
-	if cfg.VolTargetPeriod, err = envInt("VOL_TARGET_PERIOD", 50); err != nil {
-		return nil, err
-	}
-	if cfg.RiskPerTradePct, err = envDecimal("RISK_PER_TRADE_PCT", "1.0"); err != nil {
-		return nil, err
-	}
-	if cfg.PortfolioRiskCapPct, err = envDecimal("PORTFOLIO_RISK_CAP_PCT", "4.5"); err != nil {
-		return nil, err
-	}
-	if cfg.DailyLossLimitPct, err = envDecimal("DAILY_LOSS_LIMIT_PCT", "3.0"); err != nil {
-		return nil, err
-	}
+	setDecimal(&cfg.BreakoutPct, "BREAKOUT_PCT", "0.05")
+	setDecimal(&cfg.VolumeMultiplier, "VOLUME_MULTIPLIER", "2.0")
+	setDecimal(&cfg.ATRStopMultiplier, "ATR_STOP_MULTIPLIER", "3.0")
+	setDecimal(&cfg.RiskRewardRatio, "RISK_REWARD_RATIO", "1.0")
+	setDecimal(&cfg.TrendStrengthMinADX, "TREND_STRENGTH_MIN_ADX", "25")
+	setDecimal(&cfg.BreakevenTriggerR, "BREAKEVEN_TRIGGER_R", "0")
+	setDecimal(&cfg.MeanRevATRMultiplier, "MEAN_REV_ATR_MULTIPLIER", "0")
+	setDecimal(&cfg.FundingCarryMinRate, "FUNDING_CARRY_MIN_RATE", "0.001")
+	setInt(&cfg.VolTargetPeriod, "VOL_TARGET_PERIOD", 50)
+	setDecimal(&cfg.RiskPerTradePct, "RISK_PER_TRADE_PCT", "1.0")
+	setDecimal(&cfg.PortfolioRiskCapPct, "PORTFOLIO_RISK_CAP_PCT", "4.5")
+	setDecimal(&cfg.DailyLossLimitPct, "DAILY_LOSS_LIMIT_PCT", "3.0")
 	// 20% — калибровано по бэктесту (24.08.2026, cmd/backtest -mode full,
 	// 3 года, 7 монет на общем эквити): реальная просадка портфеля целиком
 	// доходила до 32%, заметно глубже, чем по каждому символу отдельно
 	// (10-18%) — портфельный риск-кап и дневной лимит защищают от разных
 	// вещей (см. комментарий у MaxDrawdownPct), ни один не поймал бы это.
-	if cfg.MaxDrawdownPct, err = envDecimal("MAX_DRAWDOWN_PCT", "20"); err != nil {
+	setDecimal(&cfg.MaxDrawdownPct, "MAX_DRAWDOWN_PCT", "20")
+	if err != nil {
 		return nil, err
 	}
 
 	cfg.TelegramBotToken = envStr("TELEGRAM_BOT_TOKEN", "")
 	cfg.TelegramChatID = envStr("TELEGRAM_CHAT_ID", "")
 	cfg.RotationStatePath = envStr("ROTATION_STATE_PATH", "")
+	cfg.MetricsAddr = envStr("METRICS_ADDR", "")
 
 	return cfg, cfg.validate()
 }

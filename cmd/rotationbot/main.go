@@ -20,15 +20,18 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"trading-bot/internal/domain"
 	exchange "trading-bot/internal/exchange/binance"
+	"trading-bot/internal/metrics"
 	"trading-bot/internal/notify"
 	"trading-bot/internal/rotation"
 
@@ -100,7 +103,14 @@ func main() {
 		notifier.Notify(ctx, fmt.Sprintf("🔄 [РОТАЦИЯ] Бот запущен (виртуальный портфель, без реальных ордеров)\nЭквити: %s USDT", st.Equity.StringFixed(2)))
 	}
 
+	// st мутируется только внутри check() (единственный вызывающий — таймер
+	// в цикле ниже, один и тот же горутин), но /metrics читает её из
+	// горутины net/http — без мьютекса это была бы гонка.
+	var stMu sync.Mutex
+
 	check := func() {
+		stMu.Lock()
+		defer stMu.Unlock()
 		due := st.LastRebalance.IsZero() || time.Since(st.LastRebalance) >= time.Duration(p.rebalanceEvery)*24*time.Hour
 		if !due {
 			return
@@ -118,6 +128,28 @@ func main() {
 		if err := rotation.SaveState(*statePath, st); err != nil {
 			log.Printf("⚠️  Не удалось сохранить состояние: %v", err)
 		}
+	}
+
+	if addr := os.Getenv("METRICS_ADDR"); addr != "" {
+		collect := func(context.Context) []metrics.Metric {
+			stMu.Lock()
+			snapshot := st
+			stMu.Unlock()
+			return rotationMetrics(snapshot)
+		}
+		srv := &http.Server{Addr: addr, Handler: metrics.Handler(collect)}
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("⚠️  Metrics-сервер остановился: %v", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			srv.Shutdown(shutdownCtx)
+		}()
+		log.Printf("📊 Метрики на http://%s/metrics", addr)
 	}
 
 	check() // сразу при старте — если это первый запуск или пропущенный срок
@@ -249,6 +281,25 @@ func rebalance(ctx context.Context, client *futures.Client, st *rotation.State, 
 		notifier.Notify(ctx, msg)
 	}
 	return nil
+}
+
+func rotationMetrics(st rotation.State) []metrics.Metric {
+	ddPct := 0.0
+	if st.PeakEquity.IsPositive() {
+		ddPct, _ = st.PeakEquity.Sub(st.Equity).Div(st.PeakEquity).Mul(decimal.NewFromInt(100)).Float64()
+	}
+	out := []metrics.Metric{
+		{Name: "rotationbot_equity_usdt", Help: "Virtual portfolio equity, USDT", Type: "gauge", Value: st.Equity.InexactFloat64()},
+		{Name: "rotationbot_drawdown_pct", Help: "Drawdown from peak equity, %", Type: "gauge", Value: ddPct},
+		{Name: "rotationbot_positions", Help: "Number of open virtual legs", Type: "gauge", Value: float64(len(st.Positions))},
+	}
+	if !st.LastRebalance.IsZero() {
+		out = append(out, metrics.Metric{
+			Name: "rotationbot_last_rebalance_unix", Help: "Unix timestamp of the last rebalance", Type: "gauge",
+			Value: float64(st.LastRebalance.Unix()),
+		})
+	}
+	return out
 }
 
 func parseSymbols(csv string) []string {

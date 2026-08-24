@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"trading-bot/internal/config"
 	"trading-bot/internal/domain"
 	exchange "trading-bot/internal/exchange/binance"
+	"trading-bot/internal/metrics"
 	"trading-bot/internal/notify"
 	"trading-bot/internal/risk"
 	"trading-bot/internal/rotation"
@@ -173,6 +175,41 @@ func rotationStatusText(path string) string {
 	return b.String()
 }
 
+// MetricsHandler отдаёт /metrics в формате Prometheus (см. internal/metrics).
+// Собирает значения заново на каждый запрос — по одному REST-вызову эквити
+// плюс локальные значения по каждому символу, не кэш.
+func (r *Runner) MetricsHandler() http.Handler {
+	return metrics.Handler(r.collectMetrics)
+}
+
+func (r *Runner) collectMetrics(ctx context.Context) []metrics.Metric {
+	out := make([]metrics.Metric, 0, len(r.bots)+1)
+	if equity, err := r.equitySrc.Equity(ctx); err == nil {
+		out = append(out, metrics.Metric{
+			Name: "tradingbot_equity_usdt", Help: "Account equity, USDT", Type: "gauge",
+			Value: equity.InexactFloat64(),
+		})
+	}
+	for symbol, bot := range r.bots {
+		out = append(out, metrics.Metric{
+			Name: "tradingbot_position_state", Help: "0=idle 1=opening 2=in_position", Type: "gauge",
+			Value: positionStateValue(bot.State()), Labels: map[string]string{"symbol": symbol},
+		})
+	}
+	return out
+}
+
+func positionStateValue(state string) float64 {
+	switch state {
+	case "OPENING":
+		return 1
+	case "IN_POSITION":
+		return 2
+	default:
+		return 0
+	}
+}
+
 // Run запускает потоки биржи и обрабатывает события до отмены ctx.
 func (r *Runner) Run(ctx context.Context) error {
 	// Буферы масштабируются числом символов — один общий канал на все
@@ -199,6 +236,22 @@ func (r *Runner) Run(ctx context.Context) error {
 	// обработку свечей/ордеров.
 	if tg, ok := r.notifier.(*notify.Telegram); ok {
 		go tg.ListenCommands(ctx, r.statusText)
+	}
+
+	if r.cfg.MetricsAddr != "" {
+		srv := &http.Server{Addr: r.cfg.MetricsAddr, Handler: r.MetricsHandler()}
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("⚠️  Metrics-сервер остановился: %v", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			srv.Shutdown(shutdownCtx)
+		}()
+		log.Printf("📊 Метрики на http://%s/metrics", r.cfg.MetricsAddr)
 	}
 
 	log.Printf("✅ Бот в работе | %d символ(ов) %v | %s | окно %d свечей",
