@@ -97,14 +97,17 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// ohlcv — сырые строковые поля свечи, общие для REST и WS.
+// ohlcv — сырые строковые поля свечи, общие для REST и WS. takerBuyVolume —
+// часть volume от агрессивных покупателей (WS: Kline.ActiveBuyVolume,
+// REST: Kline.TakerBuyBaseAssetVolume) — грубый прокси дисбаланса потока
+// ордеров, см. domain.Candle.TakerBuyVolume.
 type ohlcv struct {
-	open, high, low, closePrice, volume string
+	open, high, low, closePrice, volume, takerBuyVolume string
 }
 
 // parseOHLCV разбирает цены в decimal. Ошибка парсинга — это повод пропустить
 // свечу, а не торговать по нулевой цене: прежний fmt.Sscanf молча оставлял 0.
-func parseOHLCV(raw ohlcv) (o, h, l, c, v decimal.Decimal, err error) {
+func parseOHLCV(raw ohlcv) (o, h, l, c, v, tbv decimal.Decimal, err error) {
 	fields := []struct {
 		name string
 		src  string
@@ -115,35 +118,38 @@ func parseOHLCV(raw ohlcv) (o, h, l, c, v decimal.Decimal, err error) {
 		{"low", raw.low, &l},
 		{"close", raw.closePrice, &c},
 		{"volume", raw.volume, &v},
+		{"taker buy volume", raw.takerBuyVolume, &tbv},
 	}
 	for _, f := range fields {
 		parsed, perr := decimal.NewFromString(f.src)
 		if perr != nil {
-			return o, h, l, c, v, fmt.Errorf("разбор %s %q: %w", f.name, f.src, perr)
+			return o, h, l, c, v, tbv, fmt.Errorf("разбор %s %q: %w", f.name, f.src, perr)
 		}
 		*f.dst = parsed
 	}
-	return o, h, l, c, v, nil
+	return o, h, l, c, v, tbv, nil
 }
 
 func toCandle(event *futures.WsKlineEvent) (domain.Candle, error) {
 	k := event.Kline
 
-	open, high, low, closePrice, volume, err := parseOHLCV(ohlcv{k.Open, k.High, k.Low, k.Close, k.Volume})
+	open, high, low, closePrice, volume, takerBuyVolume, err := parseOHLCV(
+		ohlcv{k.Open, k.High, k.Low, k.Close, k.Volume, k.ActiveBuyVolume})
 	if err != nil {
 		return domain.Candle{}, err
 	}
 
 	return domain.Candle{
-		Symbol:    event.Symbol,
-		OpenTime:  time.UnixMilli(k.StartTime),
-		CloseTime: time.UnixMilli(k.EndTime),
-		Open:      open,
-		High:      high,
-		Low:       low,
-		Close:     closePrice,
-		Volume:    volume,
-		IsClosed:  k.IsFinal,
+		Symbol:         event.Symbol,
+		OpenTime:       time.UnixMilli(k.StartTime),
+		CloseTime:      time.UnixMilli(k.EndTime),
+		Open:           open,
+		High:           high,
+		Low:            low,
+		Close:          closePrice,
+		Volume:         volume,
+		TakerBuyVolume: takerBuyVolume,
+		IsClosed:       k.IsFinal,
 	}, nil
 }
 
@@ -177,20 +183,22 @@ func LoadRecentCandles(ctx context.Context, client *futures.Client, symbol, inte
 // klineToCandle разбирает один REST-kline в domain.Candle. Общий код между
 // LoadRecentCandles и LoadHistoricalCandles.
 func klineToCandle(symbol string, k *futures.Kline) (domain.Candle, error) {
-	open, high, low, closePrice, volume, err := parseOHLCV(ohlcv{k.Open, k.High, k.Low, k.Close, k.Volume})
+	open, high, low, closePrice, volume, takerBuyVolume, err := parseOHLCV(
+		ohlcv{k.Open, k.High, k.Low, k.Close, k.Volume, k.TakerBuyBaseAssetVolume})
 	if err != nil {
 		return domain.Candle{}, err
 	}
 	return domain.Candle{
-		Symbol:    symbol,
-		OpenTime:  time.UnixMilli(k.OpenTime),
-		CloseTime: time.UnixMilli(k.CloseTime),
-		Open:      open,
-		High:      high,
-		Low:       low,
-		Close:     closePrice,
-		Volume:    volume,
-		IsClosed:  true,
+		Symbol:         symbol,
+		OpenTime:       time.UnixMilli(k.OpenTime),
+		CloseTime:      time.UnixMilli(k.CloseTime),
+		Open:           open,
+		High:           high,
+		Low:            low,
+		Close:          closePrice,
+		Volume:         volume,
+		TakerBuyVolume: takerBuyVolume,
+		IsClosed:       true,
 	}, nil
 }
 

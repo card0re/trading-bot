@@ -20,7 +20,13 @@ type Candle struct {
 	Low       decimal.Decimal
 	Close     decimal.Decimal
 	Volume    decimal.Decimal
-	IsClosed  bool
+	// TakerBuyVolume — часть Volume, пришедшая от тейкеров-покупателей
+	// (агрессивные BUY, а не пассивные лимитки на bid). TakerBuyVolume/Volume
+	// — грубый прокси биржевого дисбаланса потока ордеров без доступа к
+	// самому стакану (у Binance нет бесплатной истории L2-глубины, а это
+	// поле есть в каждой свече, и в REST, и в WS, готово к бэктесту).
+	TakerBuyVolume decimal.Decimal
+	IsClosed       bool
 }
 
 // OrderEvent — событие по ордеру из приватного потока.

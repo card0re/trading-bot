@@ -880,6 +880,53 @@ func TestEntryAllowedWhenADXAboveThreshold(t *testing.T) {
 	}
 }
 
+// candleWithBuyRatio — как candle(), но с явным TakerBuyVolume/Volume, для
+// тестов OrderFlowMinRatio. Volume=10 (не 1, как в candle()), чтобы buyRatio
+// была точным нецелым отношением.
+func candleWithBuyRatio(high, closePrice, buyRatio float64) domain.Candle {
+	c := candle(high, closePrice)
+	c.Volume = decimal.NewFromInt(10)
+	c.TakerBuyVolume = decimal.NewFromFloat(buyRatio).Mul(c.Volume)
+	return c
+}
+
+func TestEntryBlockedByOrderFlowImbalance(t *testing.T) {
+	exec := &fakeExecutor{}
+	eq := newFakeEquitySource(10000)
+	risk := newFakeRiskGate()
+	params := testParams()
+	params.OrderFlowMinRatio = decimal.NewFromFloat(0.7) // нужно >=70% объёма от покупателей
+	bot := NewBreakout(exec, eq, risk, nil, params)
+	warmFlat(bot)
+
+	// Пробой цены есть, но поток явно не в его сторону (30% от покупателей) —
+	// фильтр должен заблокировать вход, несмотря на формальный пробой.
+	bot.OnCandle(context.Background(), candleWithBuyRatio(105, 105, 0.3))
+
+	if got := exec.snapshot(); got.openCalls != 0 {
+		t.Fatalf("слабый поток покупателей должен был заблокировать вход, openCalls=%d", got.openCalls)
+	}
+	if bot.State() != "IDLE" {
+		t.Fatalf("ожидалось IDLE, получено %s", bot.State())
+	}
+}
+
+func TestEntryAllowedWhenOrderFlowConfirms(t *testing.T) {
+	exec := &fakeExecutor{}
+	eq := newFakeEquitySource(10000)
+	risk := newFakeRiskGate()
+	params := testParams()
+	params.OrderFlowMinRatio = decimal.NewFromFloat(0.7)
+	bot := NewBreakout(exec, eq, risk, nil, params)
+	warmFlat(bot)
+
+	bot.OnCandle(context.Background(), candleWithBuyRatio(105, 105, 0.8))
+
+	if got := exec.snapshot(); got.openCalls != 1 {
+		t.Fatalf("сильный поток покупателей не должен блокировать вход, openCalls=%d", got.openCalls)
+	}
+}
+
 func TestBreakevenMovesStopAfterTriggerR(t *testing.T) {
 	exec := &fakeExecutor{}
 	eq := newFakeEquitySource(10000)

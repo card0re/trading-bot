@@ -120,6 +120,16 @@ type Params struct {
 	// относительно его же обычного уровня, и это отдельно снижает размер
 	// позиции, а не просто раздвигает стоп. 0 — выключено.
 	VolTargetPeriod int
+
+	// OrderFlowMinRatio — доп. подтверждение пробоя дисбалансом потока
+	// ордеров: доля объёма пробойной свечи от агрессивных покупателей
+	// (domain.Candle.TakerBuyVolume/Volume) должна быть >= OrderFlowMinRatio
+	// для лонга и <= 1-OrderFlowMinRatio для шорта — не просто много объёма
+	// (это уже проверяет VolumeMultiplier), а объём именно в сторону пробоя.
+	// Грубый прокси биржевого стакана без доступа к самой книге ордеров (у
+	// Binance нет бесплатной истории L2-глубины для бэктеста, а это поле
+	// есть в каждой свече). 0 — фильтр выключен, любой баланс объёма проходит.
+	OrderFlowMinRatio decimal.Decimal
 }
 
 // Breakout входит в лонг по пробою максимума последних LookbackBars свечей,
@@ -371,8 +381,19 @@ func (b *Breakout) OnCandle(ctx context.Context, c domain.Candle) {
 	// остальных индикаторов через zero-value.
 	adxOK := b.params.TrendStrengthMinADX.IsZero() || adxVal.GreaterThanOrEqual(b.params.TrendStrengthMinADX)
 
-	longOK := c.Close.GreaterThan(longTrigger) && c.Close.GreaterThan(trendVal) && volumeOK && adxOK
-	shortOK := c.Close.LessThan(shortTrigger) && c.Close.LessThan(trendVal) && volumeOK && adxOK
+	// Дисбаланс потока ордеров: доля объёма свечи от агрессивных покупателей.
+	// OrderFlowMinRatio==0 — фильтр выключен, любой баланс проходит (тот же
+	// стиль отключения, что и у adxOK выше).
+	buyRatio := decimal.Zero
+	if c.Volume.IsPositive() {
+		buyRatio = c.TakerBuyVolume.Div(c.Volume)
+	}
+	orderFlowLongOK := b.params.OrderFlowMinRatio.IsZero() || buyRatio.GreaterThanOrEqual(b.params.OrderFlowMinRatio)
+	orderFlowShortOK := b.params.OrderFlowMinRatio.IsZero() ||
+		buyRatio.LessThanOrEqual(decimal.NewFromInt(1).Sub(b.params.OrderFlowMinRatio))
+
+	longOK := c.Close.GreaterThan(longTrigger) && c.Close.GreaterThan(trendVal) && volumeOK && adxOK && orderFlowLongOK
+	shortOK := c.Close.LessThan(shortTrigger) && c.Close.LessThan(trendVal) && volumeOK && adxOK && orderFlowShortOK
 
 	// Вход "на возврат к среднему" — зеркальная идея пробою, но работает
 	// ТОЛЬКО там, где пробойный фильтр силы тренда его выключил (ADX ниже
