@@ -7,6 +7,12 @@
 // ATR-стопа и нет ценового риска по конструкции сделки — реальная причина,
 // по которой этот класс стратегий у профи документированно работает
 // (10-30% годовых, источники — arbitragescanner.io, kraken.com/learn).
+//
+// ApplyEvent — единственное место, где принимается решение войти/выйти/
+// собрать funding. Simulate (бэктест, cmd/carry) и live-бот (cmd/carrybot)
+// оба вызывают именно её, а не дублируют логику каждый по-своему — иначе
+// легко было бы незаметно разойтись в правилах между тем, что проверено
+// walk-forward, и тем, что реально торгует (пусть и виртуально).
 package carry
 
 import (
@@ -18,8 +24,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// periodsPerYear — funding на Binance каждые 8 часов, 365*24/8 = 1095.
-const periodsPerYear = 1095
+// PeriodsPerYear — funding на Binance каждые 8 часов, 365*24/8 = 1095.
+const PeriodsPerYear = 1095
 
 // FundingEvent — одна выплата funding вместе со спот- и перп-ценой на этот
 // момент (нужны обе, чтобы честно посчитать базис-PnL при входе/выходе, а
@@ -96,6 +102,83 @@ func (s Stats) Score() decimal.Decimal {
 	return s.ReturnPct().Sub(s.MaxDrawdown.Mul(decimal.NewFromFloat(0.5)))
 }
 
+// EventResult — что произошло на одном шаге ApplyEvent, для статистики
+// бэктеста и для уведомлений живого бота.
+type EventResult struct {
+	Funding, BasisPnL, Fee decimal.Decimal
+	Entered, Exited        bool
+}
+
+// ApplyEvent — один шаг решения: собрать funding (если в позиции), затем
+// проверить выход, затем (если не вышли) проверить вход. Мутирует equity и
+// position на месте. См. doc-комментарий пакета — общий код для бэктеста и
+// живого бота.
+func ApplyEvent(equity *decimal.Decimal, position **Position, ev FundingEvent, annualizedRate decimal.Decimal, p Params) EventResult {
+	var res EventResult
+
+	if *position != nil {
+		funding := equity.Mul(ev.Rate)
+		res.Funding = funding
+		*equity = equity.Add(funding)
+		(*position).HeldPeriods++
+	}
+
+	shouldExit := *position != nil && (annualizedRate.LessThan(p.ExitAnnualRate) ||
+		(p.MaxHoldPeriods > 0 && (*position).HeldPeriods >= p.MaxHoldPeriods))
+
+	if shouldExit {
+		pos := *position
+		basis := ev.SpotPrice.Sub(ev.PerpPrice).Sub(pos.EntrySpotPrice.Sub(pos.EntryPerpPrice))
+		basisPct := decimal.Zero
+		if pos.EntrySpotPrice.IsPositive() {
+			basisPct = basis.Div(pos.EntrySpotPrice)
+		}
+		basisPnL := equity.Mul(basisPct)
+		res.BasisPnL = basisPnL
+		*equity = equity.Add(basisPnL)
+
+		fee := equity.Mul(p.SpotFeeRate.Add(p.PerpFeeRate))
+		res.Fee = fee
+		*equity = equity.Sub(fee)
+
+		*position = nil
+		res.Exited = true
+	} else if *position == nil && annualizedRate.GreaterThanOrEqual(p.EntryAnnualRate) {
+		fee := equity.Mul(p.SpotFeeRate.Add(p.PerpFeeRate))
+		res.Fee = fee
+		*equity = equity.Sub(fee)
+
+		*position = &Position{EntrySpotPrice: ev.SpotPrice, EntryPerpPrice: ev.PerpPrice, OpenedAt: ev.Time}
+		res.Entered = true
+	}
+
+	return res
+}
+
+// TrailingAvg — среднее по последним lookback ставкам (включая текущую).
+// Общая для Simulate (по индексу в готовом слайсе) и живого бота (по
+// накопленной в state.SymbolState.RecentRates истории).
+func TrailingAvg(rates []decimal.Decimal, lookback int) decimal.Decimal {
+	from := len(rates) - lookback
+	if from < 0 {
+		from = 0
+	}
+	window := rates[from:]
+	if len(window) == 0 {
+		return decimal.Zero
+	}
+	sum := decimal.Zero
+	for _, r := range window {
+		sum = sum.Add(r)
+	}
+	return sum.Div(decimal.NewFromInt(int64(len(window))))
+}
+
+// Annualize переводит ставку за период в % годовых (см. PeriodsPerYear).
+func Annualize(periodRate decimal.Decimal) decimal.Decimal {
+	return periodRate.Mul(decimal.NewFromInt(PeriodsPerYear)).Mul(decimal.NewFromInt(100))
+}
+
 // Simulate проходит события последовательно, держит позицию максимум одну
 // за раз (не пирамидит), сайзинг — весь текущий эквити на каждую сделку
 // (без хеджа плечо не нужно — позиция и так дельта-нейтральна по цене).
@@ -103,52 +186,23 @@ func Simulate(events []FundingEvent, p Params, startEquity decimal.Decimal) Stat
 	equity := startEquity
 	peak := startEquity
 	maxDD := decimal.Zero
+	hundred := decimal.NewFromInt(100)
 
 	var fundingSum, basisSum, feesSum decimal.Decimal
 	numTrades := 0
 
-	inPosition := false
-	var entrySpot, entryPerp decimal.Decimal
-	heldPeriods := 0
+	var position *Position
+	rates := make([]decimal.Decimal, 0, len(events))
 
-	hundred := decimal.NewFromInt(100)
+	for _, ev := range events {
+		rates = append(rates, ev.Rate)
+		annualized := Annualize(TrailingAvg(rates, p.Lookback))
 
-	for i, ev := range events {
-		if inPosition {
-			funding := equity.Mul(ev.Rate)
-			fundingSum = fundingSum.Add(funding)
-			equity = equity.Add(funding)
-			heldPeriods++
-		}
-
-		avgRate := trailingAvg(events, i, p.Lookback)
-		annualized := avgRate.Mul(decimal.NewFromInt(periodsPerYear)).Mul(hundred)
-
-		shouldExit := inPosition && (annualized.LessThan(p.ExitAnnualRate) ||
-			(p.MaxHoldPeriods > 0 && heldPeriods >= p.MaxHoldPeriods))
-		if shouldExit {
-			basis := ev.SpotPrice.Sub(ev.PerpPrice).Sub(entrySpot.Sub(entryPerp))
-			basisPct := decimal.Zero
-			if entrySpot.IsPositive() {
-				basisPct = basis.Div(entrySpot)
-			}
-			basisPnL := equity.Mul(basisPct)
-			basisSum = basisSum.Add(basisPnL)
-			equity = equity.Add(basisPnL)
-
-			fee := equity.Mul(p.SpotFeeRate.Add(p.PerpFeeRate))
-			feesSum = feesSum.Add(fee)
-			equity = equity.Sub(fee)
-
-			inPosition = false
-			heldPeriods = 0
-		} else if !inPosition && annualized.GreaterThanOrEqual(p.EntryAnnualRate) {
-			fee := equity.Mul(p.SpotFeeRate.Add(p.PerpFeeRate))
-			feesSum = feesSum.Add(fee)
-			equity = equity.Sub(fee)
-
-			entrySpot, entryPerp = ev.SpotPrice, ev.PerpPrice
-			inPosition = true
+		res := ApplyEvent(&equity, &position, ev, annualized, p)
+		fundingSum = fundingSum.Add(res.Funding)
+		basisSum = basisSum.Add(res.BasisPnL)
+		feesSum = feesSum.Add(res.Fee)
+		if res.Entered {
 			numTrades++ // считаем по входу: позиция, ещё не закрытая на конец окна, — тоже сделка, не "0"
 		}
 
@@ -172,18 +226,4 @@ func Simulate(events []FundingEvent, p Params, startEquity decimal.Decimal) Stat
 		NumTrades:        numTrades,
 		MaxDrawdown:      maxDD,
 	}
-}
-
-// trailingAvg — среднее по последним lookback ставкам, включая текущую.
-func trailingAvg(events []FundingEvent, i, lookback int) decimal.Decimal {
-	from := i - lookback + 1
-	if from < 0 {
-		from = 0
-	}
-	window := events[from : i+1]
-	sum := decimal.Zero
-	for _, e := range window {
-		sum = sum.Add(e.Rate)
-	}
-	return sum.Div(decimal.NewFromInt(int64(len(window))))
 }

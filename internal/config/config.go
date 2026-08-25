@@ -92,6 +92,11 @@ type AppConfig struct {
 	// это не ошибка (ротация — отдельный необязательный процесс).
 	RotationStatePath string
 
+	// CarryStatePath — путь к файлу состояния виртуального delta-neutral
+	// carry-портфеля cmd/carrybot (см. internal/carry), если он запущен на
+	// этой же машине. Пусто — /status просто не покажет раздел про carry.
+	CarryStatePath string
+
 	// MetricsAddr — адрес (например ":9090"), на котором отдавать /metrics
 	// в формате Prometheus. Пусто (по умолчанию) — эндпоинт не поднимается,
 	// бот не слушает порт, пока явно не попросили.
@@ -220,6 +225,7 @@ func Load() (*AppConfig, error) {
 	cfg.TelegramBotToken = envStr("TELEGRAM_BOT_TOKEN", "")
 	cfg.TelegramChatID = envStr("TELEGRAM_CHAT_ID", "")
 	cfg.RotationStatePath = envStr("ROTATION_STATE_PATH", "")
+	cfg.CarryStatePath = envStr("CARRY_STATE_PATH", "")
 	cfg.MetricsAddr = envStr("METRICS_ADDR", "")
 
 	return cfg, cfg.validate()

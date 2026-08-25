@@ -323,12 +323,16 @@ func loadEvents(ctx context.Context, perpClient *futures.Client, spotClient *spo
 	}
 
 	perpCandles, err := loadOrFetchCandles(cacheDir, fmt.Sprintf("%s_perp8h_%dd.json", symbol, totalDays),
-		func() ([]domain.Candle, error) { return exchange.LoadHistoricalCandles(ctx, perpClient, symbol, "8h", start, end) })
+		func() ([]domain.Candle, error) {
+			return exchange.LoadHistoricalCandles(ctx, perpClient, symbol, "8h", start, end)
+		})
 	if err != nil {
 		return nil, fmt.Errorf("перп-свечи: %w", err)
 	}
 	spotCandles, err := loadOrFetchCandles(cacheDir, fmt.Sprintf("%s_spot8h_%dd.json", symbol, totalDays),
-		func() ([]domain.Candle, error) { return exchange.LoadHistoricalSpotCandles(ctx, spotClient, symbol, "8h", start, end) })
+		func() ([]domain.Candle, error) {
+			return exchange.LoadHistoricalSpotCandles(ctx, spotClient, symbol, "8h", start, end)
+		})
 	if err != nil {
 		return nil, fmt.Errorf("спот-свечи: %w", err)
 	}

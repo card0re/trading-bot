@@ -70,11 +70,17 @@ the round-trip fee (~0.15% of notional, both legs, both directions) — the
 same quiet-market window already found by `cmd/tune -mode carry` and
 `cmd/regime`. This reads as "the trigger condition is rare right now," not
 "the strategy is broken" — a different diagnosis than breakout or rotation,
-which lose even when they do find trades. Not deployed for an unrelated
-reason: this backtest doesn't model live execution — holding spot + short
-perp needs capital on two markets at once (not just futures margin like
-`cmd/bot`) and a two-legged execution engine that doesn't exist yet. See the
-doc comment at the top of `cmd/carry/main.go` for the full numbers.
+which lose even when they do find trades. Not deployed with real capital for
+an unrelated reason: this backtest doesn't model live execution — holding
+spot + short perp needs capital on two markets at once (not just futures
+margin like `cmd/bot`). **Now running as a paper shadow bot** (`cmd/carrybot`,
+25.08.2026) — same reasoning as `cmd/rotationbot`: see real funding/price
+data catch (or not catch) the next rate spike before risking real capital on
+an execution engine that's never traded live. Shares the exact entry/exit
+decision code with the backtest (`carry.ApplyEvent`) so the live version
+can't quietly drift from what was walk-forward-validated. See the doc
+comment at the top of `cmd/carry/main.go` for the backtest numbers and
+`cmd/carrybot/main.go` for the live version.
 
 Tried and **not enough evidence yet** — direction encouraging, sample too
 thin to trust: a Fear & Greed Index filter (`cmd/tune -mode sentiment`,
@@ -120,19 +126,25 @@ believing it.
 cmd/
   bot/          — live/testnet directional breakout bot (real orders)
   rotationbot/  — live shadow rotation bot (virtual portfolio, no orders)
+  carrybot/     — live shadow delta-neutral carry bot (virtual portfolio, no orders)
   backtest/     — replays internal/strategy.Breakout over history, no network trades
   tune/         — grid search + walk-forward validation for strategy params
   rotation/     — grid search + walk-forward validation for the rotation strategy
+  carry/        — grid search + walk-forward validation for delta-neutral carry
+  pairs/        — grid search + walk-forward validation for pairs trading (rejected)
+  regime/       — grid search + walk-forward validation for regime-switching (rejected)
 
 internal/
   strategy/   — Breakout state machine (the actual trading logic)
   risk/       — portfolio-level risk gate (per-trade, portfolio cap, daily loss, drawdown)
   rotation/   — shared state (Load/Save) for the rotation shadow-bot, read by app.go for /status
+  carry/      — delta-neutral carry: FundingEvent/ApplyEvent (shared by backtest and cmd/carrybot) + state (Load/Save)
   backtest/   — SimExecutor (fee+slippage-aware fill simulation) and stats
   indicator/  — EMA, ATR, ADX, volume average
-  exchange/binance/ — Binance REST/WebSocket wrapper, order placement, funding rate
+  exchange/binance/ — Binance REST/WebSocket wrapper, order placement, funding rate, spot candle history
+  exchange/sentiment/ — Fear & Greed Index (alternative.me), untested filter
   notify/     — Telegram notifications + inbound /status command listener
-  app/        — wires everything together for cmd/bot; also serves /status for both bots
+  app/        — wires everything together for cmd/bot; also serves /status for all shadow bots
   config/     — env var loading and validation
 ```
 
@@ -160,12 +172,24 @@ short the bottom-K, dollar-neutral, rebalance periodically. Bets on the
 paper-only and separate from the main bot — running both live on the same
 symbols would fight over the same exchange position book.
 
+## Strategy (carry shadow-bot, `cmd/carrybot`)
+
+Delta-neutral funding-rate arbitrage: buy spot, short the equal-notional
+perp, price risk cancels by construction, income is pure funding rate.
+Independent virtual account per symbol (matches how `cmd/carry` backtests
+it — 7 independent slices, not one pooled portfolio). Shares its entry/exit
+decision logic (`carry.ApplyEvent`) with the backtest directly, so the live
+version can't drift from what was walk-forward-validated. Paper-only, same
+reasoning as the rotation shadow-bot: real funding/price data, no real
+capital, until it's actually caught a rate spike live.
+
 ## Running
 
 ```bash
 cp .env.example .env    # fill in testnet API keys at minimum
 go run ./cmd/bot         # live/testnet directional bot
 go run ./cmd/rotationbot # paper rotation shadow-bot (public endpoints only, no keys needed)
+go run ./cmd/carrybot    # paper carry shadow-bot (public endpoints only, no keys needed)
 ```
 
 Backtesting / parameter search (no network trades, public market-data
@@ -175,6 +199,7 @@ endpoints only):
 go run ./cmd/backtest -days 180 -mode full     # quick sanity check
 go run ./cmd/tune -folds 3                     # walk-forward grid search, directional strategy
 go run ./cmd/rotation -days 270 -holdout 60     # walk-forward grid search, rotation strategy
+go run ./cmd/carry -days 1095 -holdout 180 -folds 3 # walk-forward grid search, delta-neutral carry
 ```
 
 ## Configuration
@@ -191,7 +216,9 @@ list, including the walk-forward evidence behind each default). Highlights:
   `MAX_DRAWDOWN_PCT` — layered limits, see comments in `.env.example` for
   why each one exists (they catch different failure modes).
 - `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` — optional; enables trade/error
-  notifications plus a `/status` command covering both bots.
+  notifications plus a `/status` command covering all bots.
+- `ROTATION_STATE_PATH`/`CARRY_STATE_PATH` — optional; point `/status` at a
+  shadow bot's state file if it runs on the same machine.
 - `METRICS_ADDR` — optional; if set, serves Prometheus metrics (see below).
 
 `internal/config.Load()` validates everything and fails fast on startup
@@ -217,8 +244,8 @@ enabled by default — the bot doesn't listen on any port unless asked to.
 
 ## Deployment
 
-Runs as two systemd services on a small GCE VM: `trading-bot` (the
-directional bot) and `rotation-bot` (the shadow bot). Deploy by
+Runs as systemd services on a small GCE VM: `trading-bot` (the directional
+bot), `rotation-bot` and `carry-bot` (paper shadow bots). Deploy by
 cross-compiling and copying the binary over:
 
 ```bash

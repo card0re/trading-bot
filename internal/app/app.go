@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"trading-bot/internal/carry"
 	"trading-bot/internal/config"
 	"trading-bot/internal/domain"
 	exchange "trading-bot/internal/exchange/binance"
@@ -137,6 +138,9 @@ func (r *Runner) statusText(ctx context.Context) string {
 	if r.cfg.RotationStatePath != "" {
 		b.WriteString(rotationStatusText(r.cfg.RotationStatePath))
 	}
+	if r.cfg.CarryStatePath != "" {
+		b.WriteString(carryStatusText(r.cfg.CarryStatePath))
+	}
 	return b.String()
 }
 
@@ -173,6 +177,34 @@ func rotationStatusText(path string) string {
 	}
 	fmt.Fprintf(&b, "Эквити: %s USDT (просадка от пика %s%%) | последний ребаланс %s",
 		st.Equity.StringFixed(2), ddPct.StringFixed(2), st.LastRebalance.Format("2006-01-02 15:04 UTC"))
+	return b.String()
+}
+
+// carryStatusText — как rotationStatusText, но для cmd/carrybot
+// (internal/carry): по символу, а не по общему портфелю, потому что и
+// бэктест, и живой бот ведут независимые виртуальные счета на каждую монету.
+func carryStatusText(path string) string {
+	st, err := carry.LoadState(path, nil, decimal.Zero)
+	if err != nil {
+		return fmt.Sprintf("\n💰 Carry: не удалось прочитать состояние (%v)\n", err)
+	}
+	if len(st.Symbols) == 0 {
+		return "\n💰 Carry: ещё нет данных\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("\n💰 Carry (виртуальный delta-neutral, спот+перп)\n")
+	for symbol, sym := range st.Symbols {
+		status := "плоско"
+		if sym.Position != nil {
+			status = fmt.Sprintf("в позиции %dп", sym.Position.HeldPeriods)
+		}
+		ddPct := decimal.Zero
+		if sym.PeakEquity.IsPositive() {
+			ddPct = sym.PeakEquity.Sub(sym.Equity).Div(sym.PeakEquity).Mul(decimal.NewFromInt(100))
+		}
+		fmt.Fprintf(&b, "• %-8s %s | эквити %s (просадка %s%%)\n", symbol, status, sym.Equity.StringFixed(2), ddPct.StringFixed(2))
+	}
 	return b.String()
 }
 
