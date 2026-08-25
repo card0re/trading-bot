@@ -52,6 +52,30 @@ this basket recently; there isn't enough out-of-sample data to validate this
 idea right now, positively or negatively. See the doc comment on
 `buildCarryGrid` in `cmd/tune/main.go`.
 
+Tried and **the cleanest result of the session so far — not deployed, needs
+live execution first, not more history**: delta-neutral funding-rate
+arbitrage / cash-and-carry (`cmd/carry`, `internal/carry`) — buy spot, short
+the equal-notional perp, price risk cancels by construction, income is pure
+funding. This is a genuinely different mechanism from the already-rejected
+`strategy.Params.FundingCarryMinRate` (`cmd/tune -mode carry`), which was the
+same entry signal but with NO hedge — a naked directional perp position with
+an ATR stop. In-sample (2023-2025, ~2.5yr): consistent gains on all 7 symbols
+at once (+15-22%), drawdowns 0.15-2.7% — an order of magnitude calmer than
+any directional strategy tried, because price risk is hedged away by the
+trade's construction rather than managed after the fact. Walk-forward on the
+last 180 days: score near zero (-0.01 to -0.08), but that's *idle*, not
+*losing* — the best candidates found almost no qualifying trades at all.
+Funding rates on this basket have been too thin the last ~6 months to clear
+the round-trip fee (~0.15% of notional, both legs, both directions) — the
+same quiet-market window already found by `cmd/tune -mode carry` and
+`cmd/regime`. This reads as "the trigger condition is rare right now," not
+"the strategy is broken" — a different diagnosis than breakout or rotation,
+which lose even when they do find trades. Not deployed for an unrelated
+reason: this backtest doesn't model live execution — holding spot + short
+perp needs capital on two markets at once (not just futures margin like
+`cmd/bot`) and a two-legged execution engine that doesn't exist yet. See the
+doc comment at the top of `cmd/carry/main.go` for the full numbers.
+
 Tried and **not enough evidence yet** — direction encouraging, sample too
 thin to trust: a Fear & Greed Index filter (`cmd/tune -mode sentiment`,
 `internal/exchange/sentiment`, `strategy.Params.SentimentExtremeFilter`)
