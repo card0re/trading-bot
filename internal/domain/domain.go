@@ -26,6 +26,14 @@ type Candle struct {
 	// самому стакану (у Binance нет бесплатной истории L2-глубины, а это
 	// поле есть в каждой свече, и в REST, и в WS, готово к бэктесту).
 	TakerBuyVolume decimal.Decimal
+	// SentimentIndex — Fear & Greed Index (0-100, alternative.me) для
+	// календарного дня этой свечи. Рыночный, не биржевой сигнал — один на
+	// весь крипторынок, не по символу, и обновляется раз в сутки, а не по
+	// свече. HasSentiment=false, когда данных для этого дня нет (до начала
+	// истории индекса — 2018-02-01 — или сбой загрузки); SentimentIndex в
+	// этом случае не валиден и не должен использоваться.
+	SentimentIndex decimal.Decimal
+	HasSentiment   bool
 	IsClosed       bool
 }
 

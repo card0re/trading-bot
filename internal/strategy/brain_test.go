@@ -927,6 +927,70 @@ func TestEntryAllowedWhenOrderFlowConfirms(t *testing.T) {
 	}
 }
 
+// candleWithSentiment — как candle(), но с явным Fear & Greed Index, для
+// тестов SentimentExtremeFilter.
+func candleWithSentiment(high, closePrice float64, index int, has bool) domain.Candle {
+	c := candle(high, closePrice)
+	c.SentimentIndex = decimal.NewFromInt(int64(index))
+	c.HasSentiment = has
+	return c
+}
+
+func TestEntryBlockedByExtremeGreedOnLong(t *testing.T) {
+	exec := &fakeExecutor{}
+	eq := newFakeEquitySource(10000)
+	risk := newFakeRiskGate()
+	params := testParams()
+	params.SentimentExtremeFilter = decimal.NewFromInt(20) // блок лонга при индексе > 80
+	bot := NewBreakout(exec, eq, risk, nil, params)
+	warmFlat(bot)
+
+	// Пробой вверх есть, но индекс на экстремальной жадности (90 > 80) —
+	// фильтр должен заблокировать вход, несмотря на формальный пробой.
+	bot.OnCandle(context.Background(), candleWithSentiment(105, 105, 90, true))
+
+	if got := exec.snapshot(); got.openCalls != 0 {
+		t.Fatalf("экстремальная жадность должна была заблокировать лонг, openCalls=%d", got.openCalls)
+	}
+	if bot.State() != "IDLE" {
+		t.Fatalf("ожидалось IDLE, получено %s", bot.State())
+	}
+}
+
+func TestEntryAllowedWhenSentimentNeutral(t *testing.T) {
+	exec := &fakeExecutor{}
+	eq := newFakeEquitySource(10000)
+	risk := newFakeRiskGate()
+	params := testParams()
+	params.SentimentExtremeFilter = decimal.NewFromInt(20)
+	bot := NewBreakout(exec, eq, risk, nil, params)
+	warmFlat(bot)
+
+	bot.OnCandle(context.Background(), candleWithSentiment(105, 105, 50, true))
+
+	if got := exec.snapshot(); got.openCalls != 1 {
+		t.Fatalf("нейтральный индекс не должен блокировать вход, openCalls=%d", got.openCalls)
+	}
+}
+
+func TestEntryAllowedWhenSentimentDataMissing(t *testing.T) {
+	exec := &fakeExecutor{}
+	eq := newFakeEquitySource(10000)
+	risk := newFakeRiskGate()
+	params := testParams()
+	params.SentimentExtremeFilter = decimal.NewFromInt(20)
+	bot := NewBreakout(exec, eq, risk, nil, params)
+	warmFlat(bot)
+
+	// HasSentiment=false (индекс за пределами истории API или сбой загрузки)
+	// — фильтр не должен останавливать торговлю из-за стороннего API.
+	bot.OnCandle(context.Background(), candleWithSentiment(105, 105, 90, false))
+
+	if got := exec.snapshot(); got.openCalls != 1 {
+		t.Fatalf("отсутствие данных индекса не должно блокировать вход, openCalls=%d", got.openCalls)
+	}
+}
+
 func TestBreakevenMovesStopAfterTriggerR(t *testing.T) {
 	exec := &fakeExecutor{}
 	eq := newFakeEquitySource(10000)

@@ -52,6 +52,32 @@ this basket recently; there isn't enough out-of-sample data to validate this
 idea right now, positively or negatively. See the doc comment on
 `buildCarryGrid` in `cmd/tune/main.go`.
 
+Tried and **not enough evidence yet** — direction encouraging, sample too
+thin to trust: a Fear & Greed Index filter (`cmd/tune -mode sentiment`,
+`internal/exchange/sentiment`, `strategy.Params.SentimentExtremeFilter`)
+blocking breakout entries at sentiment extremes (buying into extreme greed,
+shorting into extreme fear). Tested on the longer 5.5-year window below
+(`-days 2000 -holdout 720 -folds 6`): walk-forward score moved the right way
+and monotonically with filter strength (off/weak: -2.30 → strong: -2.06,
+best), then reversed once the filter got too aggressive (-4.80) — a coherent
+curve, not noise. But at the winning threshold, several symbol×fold cells
+have 0-2 trades — the same statistical-power problem as the funding-carry
+result above, not enough observations yet to trust it over luck on these
+specific 6 folds. Not deployed; code kept for when more holdout history
+accumulates. See the doc comment on `buildSentimentGrid` in `cmd/tune/main.go`.
+
+Also worth flagging: re-ran the main strategy's walk-forward on this same
+longer window (5.5 years total, 2-year holdout in 6 folds, vs. the usual
+3yr/6mo/3fold) specifically to test whether the 3-year window was just an
+unlucky slice of history. It wasn't — best score (-5.56) landed in the same
+range as the short-window result. Same re-test on Rotation, previously the
+one bright spot, was more consequential: it **fails** this longer, harder
+holdout (best score -15.12, wildly inconsistent fold-to-fold: +43-58% one
+fold, -25% the next). Rotation's earlier promising numbers came from a
+shorter, less rigorous test than the one applied to everything else here —
+it should no longer be read as "the strategy that's working," even as a
+paper-only shadow bot.
+
 Tried and **rejected** — with a methodological lesson worth flagging:
 pairs trading / stat-arb (`cmd/pairs`, `internal/pairs`) — z-score
 mean-reversion on the log-spread between correlated coins, dollar-neutral.

@@ -22,6 +22,7 @@ import (
 	"trading-bot/internal/backtest"
 	"trading-bot/internal/domain"
 	exchange "trading-bot/internal/exchange/binance"
+	"trading-bot/internal/exchange/sentiment"
 	"trading-bot/internal/strategy"
 
 	"github.com/adshao/go-binance/v2"
@@ -74,7 +75,8 @@ func main() {
 		`"carry" — пробойный и mean-reversion входы отключены (BreakoutPct недостижим, MeanRevATRMultiplier=0), `+
 		`остаётся только вход "на funding carry" сам по себе, изолированно от остальных сигналов; `+
 		`"orderflow" — остальные параметры зафиксированы на уже найденном лучшем наборе, перебирается только `+
-		`OrderFlowMinRatio (подтверждение пробоя дисбалансом потока ордеров)`)
+		`OrderFlowMinRatio (подтверждение пробоя дисбалансом потока ордеров); `+
+		`"sentiment" — как orderflow, но перебирается SentimentExtremeFilter (фильтр по Fear & Greed Index)`)
 	flag.Parse()
 	interval = *intervalFlag
 	totalDays = *daysFlag
@@ -82,8 +84,10 @@ func main() {
 	if *foldsFlag < 1 {
 		log.Fatal("❌ -folds должен быть >= 1")
 	}
-	if *modeFlag != "breakout" && *modeFlag != "carry" && *modeFlag != "orderflow" {
-		log.Fatalf("❌ -mode должен быть \"breakout\", \"carry\" или \"orderflow\", получено %q", *modeFlag)
+	switch *modeFlag {
+	case "breakout", "carry", "orderflow", "sentiment":
+	default:
+		log.Fatalf("❌ -mode должен быть \"breakout\", \"carry\", \"orderflow\" или \"sentiment\", получено %q", *modeFlag)
 	}
 
 	if err := run(*cacheDir, *topN, *foldsFlag, *modeFlag); err != nil {
@@ -125,6 +129,25 @@ func run(cacheDir string, topN, folds int, mode string) error {
 		fundings[symbol] = fr
 	}
 
+	if mode == "sentiment" {
+		fng, err := loadOrFetchSentiment(ctx, cacheDir)
+		if err != nil {
+			return fmt.Errorf("Fear&Greed: %w", err)
+		}
+		byDate := sentiment.ByDate(fng)
+		fmt.Printf("  Fear&Greed: %d дневных точек\n", len(fng))
+		for symbol := range histories {
+			h := histories[symbol]
+			for i := range h {
+				day := h[i].CloseTime.UTC().Truncate(24 * time.Hour)
+				if v, ok := byDate[day]; ok {
+					h[i].SentimentIndex = decimal.NewFromInt(int64(v))
+					h[i].HasSentiment = true
+				}
+			}
+		}
+	}
+
 	splitTime := time.Now().AddDate(0, 0, -holdoutDays)
 
 	grid := buildGrid()
@@ -133,6 +156,8 @@ func run(cacheDir string, topN, folds int, mode string) error {
 		grid = buildCarryGrid()
 	case "orderflow":
 		grid = buildOrderFlowGrid()
+	case "sentiment":
+		grid = buildSentimentGrid()
 	}
 	fmt.Printf("🔍 Комбинаций в сетке: %d (× %d символов = %d прогонов in-sample)\n\n",
 		len(grid), len(symbols), len(grid)*len(symbols))
@@ -398,11 +423,15 @@ func describeParams(p strategy.Params) string {
 	if !p.OrderFlowMinRatio.IsZero() {
 		orderFlow = p.OrderFlowMinRatio.String()
 	}
+	sentimentFilter := "off"
+	if !p.SentimentExtremeFilter.IsZero() {
+		sentimentFilter = p.SentimentExtremeFilter.String()
+	}
 	return fmt.Sprintf(
-		"LB=%d BreakoutPct=%s TrendEMA=%d VolMult=%s ATRStopMult=%s RR=%s MinADX=%s Breakeven=%s MeanRev=%s Carry=%s VolTarget=%s OrderFlow=%s",
+		"LB=%d BreakoutPct=%s TrendEMA=%d VolMult=%s ATRStopMult=%s RR=%s MinADX=%s Breakeven=%s MeanRev=%s Carry=%s VolTarget=%s OrderFlow=%s Sentiment=%s",
 		p.LookbackBars, p.BreakoutPct.StringFixed(2), p.TrendEMAPeriod,
 		p.VolumeMultiplier.StringFixed(2), p.ATRStopMultiplier.StringFixed(2), p.RiskRewardRatio.StringFixed(2),
-		adx, be, meanRev, carry, volTarget, orderFlow)
+		adx, be, meanRev, carry, volTarget, orderFlow, sentimentFilter)
 }
 
 // baseCandidates — топ-10 по holdout из первого широкого прогона (270д,
@@ -572,6 +601,77 @@ func buildOrderFlowGrid() []strategy.Params {
 		})
 	}
 	return grid
+}
+
+// buildSentimentGrid — как buildOrderFlowGrid: остальные параметры
+// зафиксированы на уже найденном walk-forward победителе (включая
+// OrderFlowMinRatio=0.6 — принятая добавка), перебирается только
+// SentimentExtremeFilter, чтобы честно ответить на один вопрос — "помогает
+// ли избегание входов на экстремумах Fear & Greed ПОВЕРХ уже лучшей версии
+// пробоя", без пересчёта всей сетки заново.
+//
+// ИТОГ (25.08.2026, -days 2000 -holdout 720 -folds 6 -mode sentiment): СЛАБЫЙ
+// СИГНАЛ, НЕ ВНЕДРЕНО. Walk-forward score двигается в правильную сторону и
+// монотонно с силой фильтра: off/5/10=-2.30 → 15=-2.28 → 20=-2.06 (лучший) →
+// 25=-4.80 (перебор, задушил сделки). Направление обнадёживает — не шум
+// в одну сторону, а связная кривая с пиком. НО, в отличие от order-flow
+// (см. buildOrderFlowGrid — плато 0.55-0.7, тысячи сделок), здесь на пороге
+// 20 ячейки по символу на фолд — единицы сделок (в фолдах 1, 4, 5 у
+// нескольких символов 0-2 сделки), тот же класс проблемы, что и у
+// buildCarryGrid — недостаточно наблюдений, чтобы отличить реальный эдж от
+// везения на конкретных 6 фолдах. НЕ ДЕПЛОИТЬ на этих данных. Пересмотреть,
+// когда наберётся больше holdout-истории, или проверить на дневном интервале
+// (F&G сам дневной — часовая гранулярность здесь искусственно мельче
+// сигнала, могло размыть трейд-каунт без надобности).
+func buildSentimentGrid() []strategy.Params {
+	filters := []float64{0, 5, 10, 15, 20, 25} // 0 = фильтр выключен (контрольная точка)
+
+	var grid []strategy.Params
+	for _, f := range filters {
+		grid = append(grid, strategy.Params{
+			LookbackBars:           30,
+			BreakoutPct:            decimal.NewFromFloat(0.05),
+			CooldownBars:           3,
+			TrendEMAPeriod:         100,
+			ATRPeriod:              14,
+			VolumeAvgPeriod:        20,
+			VolumeMultiplier:       decimal.NewFromFloat(2.0),
+			ATRStopMultiplier:      decimal.NewFromFloat(3.0),
+			RiskRewardRatio:        decimal.NewFromFloat(1.0),
+			RiskPerTradePct:        decimal.NewFromFloat(1.0),
+			ADXPeriod:              14,
+			TrendStrengthMinADX:    decimal.NewFromFloat(25),
+			FundingCarryMinRate:    decimal.NewFromFloat(0.001),
+			VolTargetPeriod:        50,
+			OrderFlowMinRatio:      decimal.NewFromFloat(0.6),
+			SentimentExtremeFilter: decimal.NewFromFloat(f),
+		})
+	}
+	return grid
+}
+
+// loadOrFetchSentiment — как loadOrFetch, но один файл кэша на весь прогон:
+// Fear & Greed один на весь рынок, не по символу.
+func loadOrFetchSentiment(ctx context.Context, cacheDir string) ([]sentiment.DailyIndex, error) {
+	path := filepath.Join(cacheDir, "feargreed.json")
+	if data, err := os.ReadFile(path); err == nil {
+		var points []sentiment.DailyIndex
+		if err := json.Unmarshal(data, &points); err == nil && len(points) > 0 {
+			return points, nil
+		}
+	}
+
+	points, err := sentiment.FetchHistory(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if data, err := json.Marshal(points); err == nil {
+		if err := os.MkdirAll(cacheDir, 0o755); err == nil {
+			_ = os.WriteFile(path, data, 0o644)
+		}
+	}
+	return points, nil
 }
 
 func loadOrFetch(ctx context.Context, client *futures.Client, cacheDir, symbol string) ([]domain.Candle, error) {

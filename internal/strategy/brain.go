@@ -130,6 +130,19 @@ type Params struct {
 	// Binance нет бесплатной истории L2-глубины для бэктеста, а это поле
 	// есть в каждой свече). 0 — фильтр выключен, любой баланс объёма проходит.
 	OrderFlowMinRatio decimal.Decimal
+
+	// SentimentExtremeFilter — фильтр по Fear & Greed Index
+	// (domain.Candle.SentimentIndex, 0-100, alternative.me): блокирует лонг
+	// на пробое, когда индекс > 100-SentimentExtremeFilter (покупка на
+	// экстремальной жадности — риск попасть в blow-off top), и шорт, когда
+	// индекс < SentimentExtremeFilter (шорт на экстремальном страхе — риск
+	// попасть в отскок от капитуляции). Не сигнал "по тренду с настроением",
+	// а фильтр избежания входа на самом экстремуме. 0 — фильтр выключен
+	// (тот же стиль 0=выкл, что у OrderFlowMinRatio выше — держим один знак
+	// у "выключено" и у zero-value, чтобы Params{} без этого поля вела себя
+	// как раньше). Свечи без данных (HasSentiment=false — до 2018-02-01 или
+	// сбой загрузки стороннего API) фильтр не блокирует.
+	SentimentExtremeFilter decimal.Decimal
 }
 
 // Breakout входит в лонг по пробою максимума последних LookbackBars свечей,
@@ -392,8 +405,18 @@ func (b *Breakout) OnCandle(ctx context.Context, c domain.Candle) {
 	orderFlowShortOK := b.params.OrderFlowMinRatio.IsZero() ||
 		buyRatio.LessThanOrEqual(decimal.NewFromInt(1).Sub(b.params.OrderFlowMinRatio))
 
-	longOK := c.Close.GreaterThan(longTrigger) && c.Close.GreaterThan(trendVal) && volumeOK && adxOK && orderFlowLongOK
-	shortOK := c.Close.LessThan(shortTrigger) && c.Close.LessThan(trendVal) && volumeOK && adxOK && orderFlowShortOK
+	// Fear & Greed: не блокирует, если фильтр выключен ИЛИ у свечи нет
+	// данных индекса (см. HasSentiment на domain.Candle).
+	sentimentLongOK := true
+	sentimentShortOK := true
+	if b.params.SentimentExtremeFilter.IsPositive() && c.HasSentiment {
+		hundred := decimal.NewFromInt(100)
+		sentimentLongOK = c.SentimentIndex.LessThanOrEqual(hundred.Sub(b.params.SentimentExtremeFilter))
+		sentimentShortOK = c.SentimentIndex.GreaterThanOrEqual(b.params.SentimentExtremeFilter)
+	}
+
+	longOK := c.Close.GreaterThan(longTrigger) && c.Close.GreaterThan(trendVal) && volumeOK && adxOK && orderFlowLongOK && sentimentLongOK
+	shortOK := c.Close.LessThan(shortTrigger) && c.Close.LessThan(trendVal) && volumeOK && adxOK && orderFlowShortOK && sentimentShortOK
 
 	// Вход "на возврат к среднему" — зеркальная идея пробою, но работает
 	// ТОЛЬКО там, где пробойный фильтр силы тренда его выключил (ADX ниже
