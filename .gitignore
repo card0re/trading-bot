@@ -21,3 +21,6 @@ rotation_state.json
 
 # Артефакты стороннего /graphify инструмента, не код проекта
 graphify-out/
+
+# Локальные настройки Claude Code (пути машины)
+.claude/
