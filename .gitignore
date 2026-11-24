@@ -21,3 +21,6 @@ rotation_state.json
 
 # Артефакты стороннего /graphify инструмента, не код проекта
 graphify-out/
+.superpowers/
+# CSV от cmd/predictrec
+data/
